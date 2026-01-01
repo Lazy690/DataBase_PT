@@ -7,182 +7,141 @@
 
 using namespace std;
 
+struct DataBankHeader {
+    uint32_t MAGIC;
+    uint32_t VERSION; 
+    //DataBankHeader(uint32_t m, uint32_t v) : MAGIC(m), VERSION(v) {}
+};
+
 enum class DataType : uint8_t {
     INTEIRO = 1, //int
     TEXTO = 2 //string
 };
 
 struct Column {
-    string name;
     DataType type;
+    string name;  
 };
 struct Row {
-    vector<variant<int32_t,  string>> row;
-    //Row(std::initializer_list<variant<int, string>> init) : row(init) {}
+    vector<variant<int32_t,  string>> values;
 };
 
 class Table {
+    private:
+
+    bool append(std::ostream& out, const Row& row) {
+        uint32_t row_count = static_cast<uint32_t>(row.values.size());
+        out.write(reinterpret_cast<const char*>(&row_count), sizeof(row_count));
+    
+        for (const auto& value : row.values) {
+            std::visit([&out](const auto& payload) {
+                using T = std::decay_t<decltype(payload)>;
+                if constexpr (std::is_same_v<T, int32_t>) {
+                    uint8_t type = 1;
+                    out.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                    out.write(reinterpret_cast<const char*>(&payload), sizeof(payload));  // now 4 bytes
+                } else if constexpr (std::is_same_v<T, std::string>) {
+                    uint8_t type = 2;
+                    out.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                    uint32_t len = static_cast<uint32_t>(payload.size());
+                    out.write(reinterpret_cast<const char*>(&len), sizeof(len));
+                    out.write(payload.data(), len);
+                }
+            }, value);
+        }
+        return out.good();
+    }
+
+    bool fetch(istream& in, Row& row) {
+        uint32_t row_count;
+        in.read(reinterpret_cast<char*>(&row_count), sizeof(row_count));
+        if (!in) return false;
+        row.values.resize(row_count);
+
+        for(size_t i = 0; i < row_count; i++) {
+            uint8_t type_int;
+            in.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
+            if (!in) return false;
+            DataType type = static_cast<DataType>(type_int);
+
+            switch (type) {
+                case DataType::INTEIRO: {
+                    int32_t payload_int;
+                    in.read(reinterpret_cast<char*>(&payload_int), sizeof(payload_int));
+                    if (!in) return false;
+                    row.values[i] = payload_int;
+                    break;
+                }
+                case DataType::TEXTO: {
+                    uint32_t len;
+                    in.read(reinterpret_cast<char*>(&len), sizeof(len));
+                    if (!in) return false;
+                    string payload_str;
+                    payload_str.resize(len);
+                    in.read(payload_str.data(), len);
+                    if (!in) return false;
+                    row.values[i] = payload_str;
+                    break;
+                }
+                default:
+                    return false; // Unknown type
+            }
+        }
+        return true;
+    }
 
     public:
+        
+        DataBankHeader DBheader{0x44415441, 1};
+        
+
+
         string name;
         vector<Column> schema;
         vector<Row> data;
     
         Table(string n, vector<Column> s, vector<Row> d) : name(n), schema(s), data(d) {
+
             cout << "Table: " << this->name << " Created." << endl;
         }
-        string get_name() {
-            return name;
+        
+        void appendRow(const Row& row) {
+            
+            ofstream out("DataBank03.bin", ios::app | ios::binary);
+            if (!out) {
+                cout << "Failed to Open file" << endl;
+                return;
+            }
+            if (!this->append(out, row)) {
+                cout << "Failed to append row." << endl;
+                return;
+            }
         }
+        void fetchAllRows() {  // Renamed/updated to read all
+            ifstream in("DataBank03.bin", ios::binary);
+            if (!in) {
+                cout << "Failed to Open file" << endl;
+                return;
+            }
+            data.clear();  // Reset internal data
+            while (in.peek() != EOF) {
+                Row row;
+                if (!this->fetch(in, row)) {
+                    if (in.eof()) break;  // Normal end
+                    cout << "Failed to fetch row." << endl;
+                    return;
+                }
+                data.push_back(row);
+            }
+        }
+
 };
-
-bool save_table_name(ostream& out, const Table& t) {
-    
-    uint32_t name_len = t.name.size();
-
-    out.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-    out.write(t.name.data(), name_len);
-
-    return out.good();
-}
-
-bool save_schema(ostream& out, const vector<Column>& schema) {
-    
-    uint64_t size = schema.size();    
-    out.write(reinterpret_cast<const char*>(&size), sizeof(&size));
-    
-    for (auto column: schema) {
-        //cout << "saving column: " << column.name << endl;
-        uint32_t name_len = column.name.size();
-
-        out.write(reinterpret_cast<const char*>(&name_len), sizeof(&name_len));
-        //cout << "String size saved: " << column.name << endl;
-        out.write(column.name.data(), name_len);
-        //cout << "String saved: " << column.name << endl;
-        switch(column.type) {
-            case DataType::TEXTO:
-                //cout << "Column.type is TEXTO" << endl;
-                break;
-        }       
-        uint8_t type = static_cast<uint8_t>(column.type);
-
-        out.write(reinterpret_cast<const char*>(&type), 1);
-        //cout << "Type saved: " << column.name << endl;
-        cout << "column saved: " << column.name << endl;
-        
-    }
-    return out.good();
-}
-
-bool save_row(ostream& out,const Row& r) {
-    for (auto item: r.row) {
-        //Make this into a function that returns the type instead of changing the variable by refrence!!!
-        //evaluate(item, type);
-
-        std::visit([&out](const auto& x) {
-            using T = std::decay_t<decltype(x)>;
-    
-            if constexpr (std::is_same_v<T, int32_t>) {
-                uint8_t type = 1;
-                out.write(reinterpret_cast<const char*>(&type), 1);
-
-                
-                out.write(reinterpret_cast<const char*>(&x), sizeof(&x));
-                
-            }
-            else if constexpr (std::is_same_v<T, std::string>) {
-                uint8_t type = 2;
-                out.write(reinterpret_cast<const char*>(&type), 1);
-
-                int32_t len = x.size();
-                out.write(reinterpret_cast<const char*>(&len), sizeof(&len));
-                out.write(x.data(), len);
-            }
-            
-        }, item);
-    }
-    return out.good();
-}
-
-//###################################################################################
-//######################## -LOADING SECTION- ########################################
-//###################################################################################
-
-bool load_table_name(istream& in, string& name) {
-
-    uint32_t name_len;
-
-    in.read(reinterpret_cast<char*>(&name_len), sizeof(name_len));
-    
-    name.resize(name_len);
-
-    in.read(name.data(), name_len);
-
-    return in.good();
-}
-
-bool load_schema(istream& in, vector<Column>& schema) {
-    
-    uint64_t size;
-    in.read(reinterpret_cast<char*>(&size), sizeof(&size));
-    schema.resize(size);
-
-    for (auto column: schema) {
-
-        uint32_t name_len;
-
-        in.read(reinterpret_cast<char*>(&name_len), sizeof(&name_len));
-        
-        column.name.resize(name_len);
-
-        in.read(reinterpret_cast<char*>(column.name.data()), name_len);
-
-        uint8_t type;
-
-        in.read(reinterpret_cast<char*>(&type), 1);
-
-        column.type = static_cast<DataType>(type);
-
-    }
-    return in.good();
-}
-
-bool load_row(istream& in, Row& r) {
-    for (auto item: r.row) {
-        //Make this into a function that returns the type instead of changing the variable by refrence!!!
-        //evaluate(item, type);
-
-        std::visit([&in](auto& x) {
-            using T = std::decay_t<decltype(x)>;
-    
-            if constexpr (std::is_same_v<T, int32_t>) {
-                uint8_t type = 1;
-                in.read(reinterpret_cast<char*>(&type), 1);
-
-                
-                in.read(reinterpret_cast<char*>(&x), sizeof(&x));
-                
-            }
-            else if constexpr (std::is_same_v<T, std::string>) {
-                uint8_t type = 2;
-                in.read(reinterpret_cast<char*>(&type), 1);
-
-                int32_t len = x.size();
-                in.read(reinterpret_cast<char*>(&len), sizeof(&len));
-                in.read(x.data(), len);
-            }
-            
-        }, item);
-    }
-    return in.good();
-}
-
 
 int main() {
 
     vector<Column> columns = {
-        {"name", DataType::TEXTO},
-        {"grade", DataType::INTEIRO}
+        {DataType::TEXTO, "name"},
+        {DataType::INTEIRO, "grade"}
     };
 
     vector<Row> rows = {
@@ -193,37 +152,35 @@ int main() {
     
     Table table("Dudes", columns, rows);
 
-    ofstream out("schema.bin", ios::binary);
+    Row add;
+    add.values.push_back("Pippa");
+    add.values.push_back(100);
 
-    if(!save_schema(out, table.schema)) {
-        cout << "Could not save schema." << endl;
-    }
-    else {
-        cout << "Worked!" << endl;
-    }
-    out.close();
+    table.appendRow(add);
 
-    vector<Column> schema;
-    ifstream in("schema.bin", ios::binary);
-    if(!load_schema(in, schema)) {
-        cout << "Could not save schema." << endl;
-    }
-    else {
-        cout << "Columns Loaded!" << endl;
-        for (auto col: schema) {
-            
-            cout << "Name: " << col.name << endl;
-            switch(col.type) {
-                case DataType::TEXTO:
-                    cout << "Type: TEXT" << endl;
-                    break;
-                case DataType::INTEIRO:
-                    cout << "Type: INTEIRO" << endl;
-                    break;
-            }
+    table.fetchAllRows();  // Updated call
+    int row_num = 1;
+    for (const auto& row : table.data) {  // Loop over all fetched rows
+        cout << "Row " << row_num++ << ":" << endl;
+        int count = 1;
+        for (auto item: row.values) {
+            cout << "item number: " << count << endl;
+            count ++;
+            visit([](const auto& x) {
+                using T = std::decay_t<decltype(x)>;
+    
+                if constexpr (std::is_same_v<T, int32_t>) {
+                    cout << "Type: int" << endl;
+                    cout << "|| " << x << " ||" << endl;
+                }
+                else if constexpr (std::is_same_v<T, std::string>) {
+                    cout << "Type: str" << endl;
+                    cout << "|| " << x << " ||" << endl;
+                }
+            }, item);
         }
+        cout << "SIZE: " << row.values.size() << endl;
     }
-    in.close();
 
     return 0;
 }
