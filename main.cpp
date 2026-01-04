@@ -72,8 +72,10 @@ class Table {
             //Move the write cursor to the end of the file to append:
             out.seekp(0, ios::end);
 
-            uint32_t row_count = row.values.size() + 1;
-            out.write(reinterpret_cast<const char*>(&row_count), sizeof(row_count));
+            //write an empty space to later store the offset of the end of the row:
+            int32_t end_of_row_offset = -1;
+            int end_of_row_offset_location = out.tellp();
+            out.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
 
             uint8_t id_type = 1;
             out.write(reinterpret_cast<const char*>(&id_type), sizeof(id_type));
@@ -102,6 +104,11 @@ class Table {
                 }, value);
             }
 
+            //store the offset of the end of the row in the empty space we saved earlier:
+            end_of_row_offset = out.tellp();
+            out.seekp(end_of_row_offset_location, ios::beg);
+            out.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+
             //Update index counter:
             out.seekp(id_index_offset, ios::beg);
             out.write(reinterpret_cast<const char*>(&index), sizeof(index));
@@ -111,12 +118,17 @@ class Table {
 
         bool fetch(istream& in, Row& row) {
 
-            uint32_t row_count;
-            in.read(reinterpret_cast<char*>(&row_count), sizeof(row_count));
-            if (!in) return false;
-            row.values.resize(row_count);
+            //Add check so that it always skips the header here!!!
 
-            for(size_t i = 0; i < row_count; i++) {
+
+            //get the offset of end of the row:
+            int32_t end_of_row_offset = 0;
+            in.read(reinterpret_cast<char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+            
+            while(true) {
+
+                if(in.tellg() == end_of_row_offset) break;   
+
                 uint8_t type_int;
                 in.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
                 if (!in) return false;
@@ -127,7 +139,7 @@ class Table {
                         int32_t payload_int;
                         in.read(reinterpret_cast<char*>(&payload_int), sizeof(payload_int));
                         if (!in) return false;
-                        row.values[i] = payload_int;
+                        row.values.push_back(payload_int);
                         break;
                     }
                     case DataType::TEXTO: {
@@ -138,7 +150,7 @@ class Table {
                         payload_str.resize(len);
                         in.read(payload_str.data(), len);
                         if (!in) return false;
-                        row.values[i] = payload_str;
+                        row.values.push_back(payload_str);
                         break;
                     }
                     default:
@@ -259,8 +271,8 @@ int main() {
     add2.values.push_back("Dude");
     add2.values.push_back(50);
     Row add3;
-    add2.values.push_back("Yohan the Butcher");
-    add2.values.push_back(25);
+    add3.values.push_back("Yohan the Butcher");
+    add3.values.push_back(25);
     Row add4;
     add4.values.push_back("Kirche");
     add4.values.push_back(99);
