@@ -80,14 +80,11 @@ class Table {
             }
             index.seekp(0, ios::end);
             int first_pos = index.tellp();
-            //cout << "Save Id position after skipping to end: " << first_pos << endl;
-            cout << "Id to save: " << id << endl;
-            cout << "Saving at position: " << index.tellp() << endl;
+            
             index.write(reinterpret_cast<const char*>(&id), sizeof(id));
-            //cout << "Offset to save: " << offset << endl;
+            
             index.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
             int second_pos = index.tellp();
-            //cout << "Cursor after saving a record: " << index.tellp() << " Bytes skipped: " << (second_pos  - first_pos) << endl;
             
             return index.good();
         }
@@ -96,10 +93,10 @@ class Table {
             //8 is because each entry is always 8 bytes wide: [value][offset in bank]
             int header_size = 9;
             index.seekg(header_size, ios::beg);
-            cout << "After skip header: " << index.tellg() <<  endl;
+            
             int id_location_offset = (ID - 1) * 8;
             index.seekg(id_location_offset, ios::cur);
-            cout << "After location calc: " << index.tellg() << endl;
+            
 
             if(index.eof()) {
                 cerr << "Id out of Bounds." << endl;
@@ -109,14 +106,14 @@ class Table {
             int32_t value = 0;
 
             index.read(reinterpret_cast<char*>(&value), sizeof(value));
-            cout << "Value pulled: " << value << endl;
+           
             if(value != ID) {
                 cerr << "Id not found" << endl;
                 return false;
             }
 
             index.read(reinterpret_cast<char*>(&fetched_offset), sizeof(fetched_offset));
-
+           
             return index.good();
 
         };
@@ -126,7 +123,7 @@ class Table {
         //====== DataBank operations                                  ======
         //==================================================================
 
-        bool append(std::fstream& out, const Row& row) {
+        bool append(std::fstream& out, const Row& row, uint32_t& hold_id, uint32_t& hold_offset) {
             
             // 2 is the index of id index offset in the header struct.
             // 4 is the size of each value in the header struct, each are 4 bytes wide.
@@ -138,17 +135,17 @@ class Table {
             out.seekg(0, ios::beg);
 
             index += 1;
-            this->hold_row_id = index;
+            hold_id = index;
             //Move the write cursor to the end of the file to append:
             out.seekp(0, ios::end);
 
             //Capture the offset of the start of the row were going to save to use in the indexer:
 
-            this->Databank_offset_recording = out.tellp();
+            hold_offset = out.tellp();
 
             //write an empty space to later store the offset of the end of the row:
             int32_t end_of_row_offset = -1;
-            int end_of_row_offset_location = out.tellp();
+            int32_t end_of_row_offset_location = out.tellp();
             out.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
 
             //Write row ID:
@@ -184,7 +181,7 @@ class Table {
             end_of_row_offset = out.tellp();
             out.seekp(end_of_row_offset_location, ios::beg);
             out.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
-
+           
             //Update index counter:
             out.seekp(id_index_offset, ios::beg);
             out.write(reinterpret_cast<const char*>(&index), sizeof(index));
@@ -196,7 +193,7 @@ class Table {
 
             //Add check so that it always skips the header here!!!
 
-
+            
             //get the offset of end of the row:
             int32_t end_of_row_offset = 0;
             in.read(reinterpret_cast<char*>(&end_of_row_offset), sizeof(end_of_row_offset));
@@ -204,7 +201,7 @@ class Table {
             while(true) {
 
                 if(in.tellg() == end_of_row_offset) break;   
-
+                
                 uint8_t type_int;
                 in.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
                 if (!in) return false;
@@ -293,20 +290,65 @@ class Table {
 
         void appendRow(const Row& row) {
             
-            hold_for_indexing.values.resize(row.values.size());
-            hold_for_indexing.values = row.values;
-
             fstream out(this->databank_path, ios::binary | ios::in | ios::out);
             if (!out) {
                 cout << "Failed to Open file when Appending." << endl;
                 return;
             }
-            if (!this->append(out, row)) {
+
+            uint32_t hold_id = 0;
+            uint32_t hold_offset = 0;
+
+            if (!this->append(out, row, hold_id, hold_offset)) {
                 cout << "Failed to append row." << endl;
                 return;
             }
             out.close();
 
+            if(!this->save_ID_record(hold_id, hold_offset)) {
+                cout << "Failed to Index ID." << endl;
+                return;
+            }
+
+        }
+
+        void fetchRow_byID(int id, Row& row) {  
+           
+            ifstream index(fs::path(this->index_path) / "id.idx", ios::binary);
+            if(!index) {
+                cerr << "Failed to find ID index file." << endl;
+                return;
+            }
+
+            int fetched_offset = 0;
+
+            if(!fetch_ID_offset(index, id, fetched_offset)) {
+                cout << "Failed to get row location from ID index" << endl;
+                return;
+            }
+            index.close();
+            
+            ifstream databank(this->databank_path, ios::binary);
+            if (!databank) {
+                cout << "Failed to Find Databank file." << endl;
+                return;
+            }
+            
+            DataBankHeader fetched_header;
+
+            databank.read(reinterpret_cast<char*>(&fetched_header), sizeof(DataBankHeader));
+            
+            if(!this->validate_databank_header(fetched_header)) {
+                cout << "Header not validated." << endl;
+                return;
+            }
+
+            //Now move the read cursor to the offset and get that row.
+            databank.seekg(fetched_offset, ios::beg);
+            if(!this->fetch(databank, row)) {
+                cout << "Failed ot fetch row from Databank" << endl;
+                return;
+            }
 
         }
 
@@ -339,13 +381,8 @@ class Table {
             }
         }
 
-        void print_ID(vector<uint32_t> ids, const vector<uint32_t> offset, const int ID, int& fetched_offset) {
+        void print_ID(const int ID, int& fetched_offset) {
             
-            for (int i = 0; i < ids.size(); i++) {
-                if(!this->save_ID_record(ids[i], offset[i])) {
-                    cout << "Failed to save id index" << endl;
-                }
-            }
             ifstream index(fs::path(this->index_path) / "id.idx", ios::binary);
             if(!index) {
                 cout << "Missing Id index file." << endl;
@@ -374,14 +411,27 @@ int main() {
     };
     
     Table table("Dudes", columns);
-
-    vector<uint32_t> ids = {1, 2, 3, 4, 5};
-    vector<uint32_t> offs = {10, 20, 30, 40, 50};
-
-    int fetched_offset = 0;
-
-    table.print_ID(ids, offs, 2, fetched_offset);
-
-    cout << "Fetched Offset: " << int(fetched_offset) << endl;    
+    
+        Row row;
+        table.fetchRow_byID(4, row);
+        
+        int count = 0;
+        for (auto item: row.values) {
+                
+            count ++;
+                visit([](const auto& x) {
+                    using T = std::decay_t<decltype(x)>;
+        
+                    if constexpr (std::is_same_v<T, int32_t>) {
+                        //cout << "Type: int" << endl;
+                        cout << "|| " << x << " ||" << endl;
+                    }
+                    else if constexpr (std::is_same_v<T, std::string>) {
+                        //cout << "Type: str" << endl;
+                        cout << "|| " << x << " ||" << endl;
+                    }
+                }, item);
+            }
+    
     return 0;
 }
