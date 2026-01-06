@@ -90,10 +90,10 @@ class Table {
         }
         bool fetch_ID_offset(istream& index, const int ID, int& fetched_offset) {
 
-            //8 is because each entry is always 8 bytes wide: [value][offset in bank]
+            //9 is the size of the header + one byte for the type
             int header_size = 9;
             index.seekg(header_size, ios::beg);
-            
+            //8 is because each entry is always 8 bytes wide: [value][offset in bank]
             int id_location_offset = (ID - 1) * 8;
             index.seekg(id_location_offset, ios::cur);
             
@@ -381,20 +381,6 @@ class Table {
             }
         }
 
-        void print_ID(const int ID, int& fetched_offset) {
-            
-            ifstream index(fs::path(this->index_path) / "id.idx", ios::binary);
-            if(!index) {
-                cout << "Missing Id index file." << endl;
-                return;
-            }
-            if(!this->fetch_ID_offset(index, ID, fetched_offset)) {
-                cout << "Failed to fetch ID" << endl;
-                return;
-            }
-            
-        }
-
 };
 
 int main() {
@@ -411,27 +397,6 @@ int main() {
     };
     
     Table table("Dudes", columns);
-    
-        Row row;
-        table.fetchRow_byID(4, row);
-        
-        int count = 0;
-        for (auto item: row.values) {
-                
-            count ++;
-                visit([](const auto& x) {
-                    using T = std::decay_t<decltype(x)>;
-        
-                    if constexpr (std::is_same_v<T, int32_t>) {
-                        //cout << "Type: int" << endl;
-                        cout << "|| " << x << " ||" << endl;
-                    }
-                    else if constexpr (std::is_same_v<T, std::string>) {
-                        //cout << "Type: str" << endl;
-                        cout << "|| " << x << " ||" << endl;
-                    }
-                }, item);
-            }
-    
+       
     return 0;
 }

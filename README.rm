@@ -1,0 +1,22 @@
+05/01/26
+
+Current Databank file format:                             One Byte
+                                                            |                  |---[int payload]
+    [[Magic][Version][Latest ID]] -> [End of row offset][Datatype] ------------|
+            Header = 12 bytes           |                                      |
+            ID at Byte 8.               [So that you know when the row ends]   |---[String len][String payload] 
+
+Current ID index file format:
+
+    [[Magic][Version]][type] -> [Value][offset] -- > Always 4 + 4 bytes wide.
+        Header = 8 bytes
+        Type = always 1 byte
+
+    Formila for getting the id you want:
+
+        int id_location_offset = (ID - 1) * 8;
+        where ID is the id you want to fetch, -1 is because the index always starts at 0 and 8 is the 
+        size of each record.
+
+    This jumps directly to the id, so no binary seach tree needed, its the fastest way to fetch a row
+    as it is O(1).
