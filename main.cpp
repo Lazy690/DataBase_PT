@@ -11,7 +11,7 @@
 using namespace std;
 namespace fs = std::filesystem;
 
-struct DataBankHeader {
+struct RecordBankHeader {
     uint32_t MAGIC;
     uint32_t VERSION;
     uint32_t ID_INDEX = 0;
@@ -37,25 +37,29 @@ struct Row {
 
 class Table {
     private:
-        DataBankHeader DBheader{0x44415441, 1};
+        RecordBankHeader DBheader{0x44415441, 1};
         IndexHeader Iheader{0x44415441, 1};
 
         uint32_t hold_row_id = 0;
         Row hold_for_indexing;
-        uint32_t Databank_offset_recording = 0;
+        uint32_t RecordBank_offset_recording = 0;
         
-        bool save_DBheader(ostream& out, const DataBankHeader& header) {
-            out.write(reinterpret_cast<const char*>(&header), sizeof(DataBankHeader));
-            return out.good();
+        bool save_DBheader(ostream& file, const RecordBankHeader& header) {
+            file.write(reinterpret_cast<const char*>(&header), sizeof(RecordBankHeader));
+            return file.good();
         }
-        bool save_Iheader(ostream& out, const IndexHeader& header, const uint32_t& type) {
-            out.write(reinterpret_cast<const char*>(&header), sizeof(IndexHeader));
-            out.write(reinterpret_cast<const char*>(&type), sizeof(type));
-            return out.good();
+        bool save_Iheader(ostream& file, const IndexHeader& header, const uint32_t& type) {
+            file.write(reinterpret_cast<const char*>(&header), sizeof(IndexHeader));
+            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+            return file.good();
         }
         
         
-        bool validate_databank_header(DataBankHeader& header) {
+        bool validate_RecordBank_header(fstream& file) {
+            
+            RecordBankHeader header;
+
+            file.read(reinterpret_cast<char*>(&header), sizeof(RecordBankHeader));
             
             if(header.MAGIC != this->DBheader.MAGIC) {
                 cerr << "Invalid Magic" << endl;
@@ -65,6 +69,27 @@ class Table {
                 cerr << "Invalid Version" << endl;
                 return false;
             }
+            file.seekg(0, ios::beg);
+
+            return true;
+        }
+
+        bool validate_Index_header(fstream& file) {
+            
+            IndexHeader header;
+
+            file.read(reinterpret_cast<char*>(&header), sizeof(IndexHeader));
+            
+            if(header.MAGIC != this->Iheader.MAGIC) {
+                cerr << "Invalid Magic" << endl;
+                return false;
+            }
+            else if(header.VERSION != this->Iheader.VERSION) {
+                cerr << "Invalid Version" << endl;
+                return false;
+            }
+
+            file.seekg(0, ios::beg);
             return true;
         }
 
@@ -75,104 +100,164 @@ class Table {
 
         bool save_ID_record(const uint32_t& id, const uint32_t& offset) {
 
-            fstream index(fs::path(this->index_path) / "id.idx", ios::binary | ios::in | ios::out);
-            if(!index) {
+            fstream file(fs::path(this->index_path) / "id.idx", ios::binary | ios::in | ios::out);
+
+            if(!validate_Index_header(file)) {
+                cerr << "Invalid file Format." << endl;
+                return false;
+            }
+
+            if(!file) {
                 cout << "Missing Id index file." << endl;
                 return false;
             }
-            index.seekp(0, ios::end);
-            //int first_pos = index.tellp();
+            file.seekp(0, ios::end);
+            //int first_pos = file.tellp();
             
-            index.write(reinterpret_cast<const char*>(&id), sizeof(id));
+            file.write(reinterpret_cast<const char*>(&id), sizeof(id));
             
-            index.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
-            //int second_pos = index.tellp();
+            file.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+            //int second_pos = file.tellp();
             
-            return index.good();
+            return file.good();
         }
-        bool fetch_ID_offset(istream& index, const int ID, int& fetched_offset) {
+
+        bool save_value_index_record(const Row& row, uint32_t& hold_offset) {
+          
+            for(int i = 0; i < int(schema.size()); i++) {
+
+                string file_name = schema[i].name + ".idx";
+
+                fstream index_out(fs::path(index_path) / file_name, ios::binary | ios::in | ios::out);
+
+                if(!validate_Index_header(index_out)) {
+                    cerr << "Invalid file Format." << endl;
+                    return false;
+                }
+                
+                switch(schema[i].type) {
+                    
+                    case DataType::INTEIRO:
+                        if(!this->indexer.insert_into_BST_int(index_out, get<int32_t>(row.values[i]), hold_offset)) {
+                            cerr << "Failed to save Index record." << endl;
+                            return false;
+                        }
+                        break;
+
+                    case DataType::TEXTO:
+                        if(!this->indexer.insert_into_BST_str(index_out, get<string>(row.values[i]), hold_offset)) {
+                            cerr << "Failed to save Index record." << endl;
+                            return false;
+                        }
+                        break;
+                }
+            }
+            return true;
+        }
+
+        bool fetch_ID_offset(fstream& file, const int ID, int& fetched_offset) {
+
+            if(!validate_Index_header(file)) {
+                cerr << "Invalid file Format." << endl;
+                return false;
+            }
 
             //9 is the size of the header + one byte for the type
             int header_size = 9;
-            index.seekg(header_size, ios::beg);
+            file.seekg(header_size, ios::beg);
             //8 is because each entry is always 8 bytes wide: [value][offset in bank]
             int id_location_offset = (ID - 1) * 8;
-            index.seekg(id_location_offset, ios::cur);
+            file.seekg(id_location_offset, ios::cur);
             
 
-            if(index.eof()) {
+            if(file.eof()) {
                 cerr << "Id out of Bounds." << endl;
                 return false;
             }
 
             int32_t value = 0;
 
-            index.read(reinterpret_cast<char*>(&value), sizeof(value));
+            file.read(reinterpret_cast<char*>(&value), sizeof(value));
            
             if(value != ID) {
                 cerr << "Id not found" << endl;
                 return false;
             }
 
-            index.read(reinterpret_cast<char*>(&fetched_offset), sizeof(fetched_offset));
+            file.read(reinterpret_cast<char*>(&fetched_offset), sizeof(fetched_offset));
            
-            return index.good();
+            return file.good();
 
         };
 
+        bool fetch_Value_offset(fstream& file, variant<int32_t, string>& value, vector<uint32_t>& fetched_offsets) {
+
+            std::visit([&file, &fetched_offsets, this](const auto& key) {
+                using T = std::decay_t<decltype(key)>;
+                    if constexpr (std::is_same_v<T, int32_t>) {
+                        this->indexer.fetch_from_BST_int(file, key, fetched_offsets);
+                    } else if constexpr (std::is_same_v<T, std::string>) {
+                        this->indexer.fetch_from_BST_str(file, key, fetched_offsets);
+                    }
+            }, value); 
+
+            return file.good();
+        }
+        
+
 
         //==================================================================
-        //====== DataBank operations                                  ======
+        //====== RecordBank operations                                  ======
         //==================================================================
 
-        bool append(std::fstream& out, const Row& row, uint32_t& hold_id, uint32_t& hold_offset) {
+        bool append(std::fstream& file, const Row& row, uint32_t& hold_id, uint32_t& hold_offset) {
             
             // 2 is the index of id index offset in the header struct.
             // 4 is the size of each value in the header struct, each are 4 bytes wide.
             int id_index_offset = 2 * 4;
             uint32_t index = 0;
-            out.seekg(id_index_offset, ios::beg);
-            out.read(reinterpret_cast<char*>(&index), sizeof(index));
+            file.seekg(id_index_offset, ios::beg);
+            file.read(reinterpret_cast<char*>(&index), sizeof(index));
             //reset read cursor:
-            out.seekg(0, ios::beg);
+            file.seekg(0, ios::beg);
 
             index += 1;
             hold_id = index;
             //Move the write cursor to the end of the file to append:
-            out.seekp(0, ios::end);
+            file.seekp(0, ios::end);
 
             //Capture the offset of the start of the row were going to save to use in the indexer:
 
-            hold_offset = out.tellp();
+            hold_offset = file.tellp();
 
             //write an empty space to later store the offset of the end of the row:
             int32_t end_of_row_offset = -1;
-            int32_t end_of_row_offset_location = out.tellp();
-            out.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+            int32_t end_of_row_offset_location = file.tellp();
+            file.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
 
             //Write row ID:
             uint8_t id_type = 1;
-            out.write(reinterpret_cast<const char*>(&id_type), sizeof(id_type));
-            out.write(reinterpret_cast<const char*>(&index), sizeof(index));
+            file.write(reinterpret_cast<const char*>(&id_type), sizeof(id_type));
+            file.write(reinterpret_cast<const char*>(&index), sizeof(index));
 
 
             for (const auto& value : row.values) {
-                std::visit([&out](const auto& payload) {
+                std::visit([&file](const auto& payload) {
                     using T = std::decay_t<decltype(payload)>;
                         if constexpr (std::is_same_v<T, int32_t>) {
 
                             uint8_t type = 1;
-                            out.write(reinterpret_cast<const char*>(&type), sizeof(type));
-                            out.write(reinterpret_cast<const char*>(&payload), sizeof(payload));  // now 4 bytes
+                            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                            file.write(reinterpret_cast<const char*>(&payload), sizeof(payload));  // now 4 bytes
                             
 
                         } else if constexpr (std::is_same_v<T, std::string>) {
 
                             uint8_t type = 2;
-                            out.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
                             uint32_t len = static_cast<uint32_t>(payload.size());
-                            out.write(reinterpret_cast<const char*>(&len), sizeof(len));
-                            out.write(payload.data(), len);
+                            file.write(reinterpret_cast<const char*>(&len), sizeof(len));
+                            file.write(payload.data(), len);
                     
 
                         }
@@ -180,51 +265,53 @@ class Table {
             }
 
             //store the offset of the end of the row in the empty space we saved earlier:
-            end_of_row_offset = out.tellp();
-            out.seekp(end_of_row_offset_location, ios::beg);
-            out.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+            end_of_row_offset = file.tellp();
+            file.seekp(end_of_row_offset_location, ios::beg);
+            file.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
            
             //Update index counter:
-            out.seekp(id_index_offset, ios::beg);
-            out.write(reinterpret_cast<const char*>(&index), sizeof(index));
-            out.seekp(0, ios::beg);
-            return out.good();
+            file.seekp(id_index_offset, ios::beg);
+            file.write(reinterpret_cast<const char*>(&index), sizeof(index));
+            file.seekp(0, ios::beg);
+            return file.good();
         }
 
-        bool fetch(istream& in, Row& row) {
+        bool fetch(istream& file, Row& row, int fetched_offset = -1) {
 
-            //Add check so that it always skips the header here!!!
+            if (fetched_offset != -1) {
+                //Now move the read cursor to the offset and get that row.
+                file.seekg(fetched_offset, ios::beg);
+            }
 
-            
             //get the offset of end of the row:
             int32_t end_of_row_offset = 0;
-            in.read(reinterpret_cast<char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+            file.read(reinterpret_cast<char*>(&end_of_row_offset), sizeof(end_of_row_offset));
             
             while(true) {
 
-                if(in.tellg() == end_of_row_offset) break;   
+                if(file.tellg() == end_of_row_offset) break;   
                 
                 uint8_t type_int;
-                in.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
-                if (!in) return false;
+                file.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
+                if (!file) return false;
                 DataType type = static_cast<DataType>(type_int);
 
                 switch (type) {
                     case DataType::INTEIRO: {
                         int32_t payload_int;
-                        in.read(reinterpret_cast<char*>(&payload_int), sizeof(payload_int));
-                        if (!in) return false;
+                        file.read(reinterpret_cast<char*>(&payload_int), sizeof(payload_int));
+                        if (!file) return false;
                         row.values.push_back(payload_int);
                         break;
                     }
                     case DataType::TEXTO: {
                         uint32_t len;
-                        in.read(reinterpret_cast<char*>(&len), sizeof(len));
-                        if (!in) return false;
+                        file.read(reinterpret_cast<char*>(&len), sizeof(len));
+                        if (!file) return false;
                         string payload_str;
                         payload_str.resize(len);
-                        in.read(payload_str.data(), len);
-                        if (!in) return false;
+                        file.read(payload_str.data(), len);
+                        if (!file) return false;
                         row.values.push_back(payload_str);
                         break;
                     }
@@ -247,7 +334,7 @@ class Table {
         Indexer indexer;
 
         fs::path folder_path;
-        fs::path databank_path;
+        fs::path RecordBank_path;
         fs::path index_path;
 
         Table(string n, const vector<Column>& s) : name(n), schema(s){
@@ -256,11 +343,11 @@ class Table {
             folder_path = fs::path(this->name);
             fs::create_directories(folder_path);
             
-            databank_path = fs::path(folder_path) / "DataBank.bin";
-            if(!fs::exists(databank_path)) {
-                ofstream ofs(databank_path, ios::binary);
+            RecordBank_path = fs::path(folder_path) / "RecordBank.bin";
+            if(!fs::exists(RecordBank_path)) {
+                ofstream ofs(RecordBank_path, ios::binary);
                 if(!this->save_DBheader(ofs, this->DBheader)) {
-                    cout << "Failed to initiate DataBank." << endl;
+                    cout << "Failed to initiate RecordBank." << endl;
                 }
             }
 
@@ -297,48 +384,41 @@ class Table {
 
         void appendRow(const Row& row) {
             
-            fstream out(this->databank_path, ios::binary | ios::in | ios::out);
-            if (!out) {
+            fstream RecordBank(this->RecordBank_path, ios::binary | ios::in | ios::out);
+            if (!file) {
                 cout << "Failed to Open file when Appending." << endl;
+                return;
+            }
+
+            if(!this->validate_RecordBank_header(RecordBank)) {
+                cout << "Header not validated." << endl;
                 return;
             }
 
             uint32_t hold_id = 0;
             uint32_t hold_offset = 0;
 
-            if (!this->append(out, row, hold_id, hold_offset)) {
+            if (!this->append(RecordBank, row, hold_id, hold_offset)) {
                 cout << "Failed to append row." << endl;
                 return;
             }
-            out.close();
+            file.close();
 
             if(!this->save_ID_record(hold_id, hold_offset)) {
                 cout << "Failed to Index ID." << endl;
                 return;
             }
 
-            for(int i = 0; i < int(schema.size()); i++) {
-
-                string file_name = schema[i].name + ".idx";
-
-                fstream index_out(fs::path(index_path) / file_name, ios::binary | ios::in | ios::out);
-                
-                switch(schema[i].type) {
-                    
-                    case DataType::INTEIRO:
-                        this->indexer.insert_into_BST_int(index_out, get<int32_t>(row.values[i]), hold_offset);
-                        break;
-
-                    case DataType::TEXTO:
-                        this->indexer.insert_into_BST_str(index_out, get<string>(row.values[i]), hold_offset);
-                        break;
-                }
+            if(!save_value_index_record(row, hold_offset)) {
+                cerr << "Failed to Index Item" << endl;
+                return;
             }
+            
         }
 
         void fetchRow_byID(int id, Row& row) {  
            
-            ifstream index(fs::path(this->index_path) / "id.idx", ios::binary);
+            fstream index(fs::path(this->index_path) / "id.idx", ios::binary | ios::in);
             if(!index) {
                 cerr << "Failed to find ID index file." << endl;
                 return;
@@ -352,25 +432,19 @@ class Table {
             }
             index.close();
             
-            ifstream databank(this->databank_path, ios::binary);
-            if (!databank) {
-                cout << "Failed to Find Databank file." << endl;
+            fstream RecordBank(this->RecordBank_path, ios::binary | ios::in);
+            if (!RecordBank) {
+                cout << "Failed to Find RecordBank file." << endl;
                 return;
             }
             
-            DataBankHeader fetched_header;
-
-            databank.read(reinterpret_cast<char*>(&fetched_header), sizeof(DataBankHeader));
-            
-            if(!this->validate_databank_header(fetched_header)) {
+            if(!this->validate_RecordBank_header(RecordBank)) {
                 cout << "Header not validated." << endl;
                 return;
             }
 
-            //Now move the read cursor to the offset and get that row.
-            databank.seekg(fetched_offset, ios::beg);
-            if(!this->fetch(databank, row)) {
-                cout << "Failed ot fetch row from Databank" << endl;
+            if(!this->fetch(RecordBank, row, fetched_offset)) {
+                cout << "Failed ot fetch row from RecordBank" << endl;
                 return;
             }
 
@@ -388,78 +462,55 @@ class Table {
 
             vector<uint32_t> fetched_offsets;
             
-            std::visit([&index, &fetched_offsets, this](const auto& key) {
-                    using T = std::decay_t<decltype(key)>;
-                        if constexpr (std::is_same_v<T, int32_t>) {
-                            if(!this->indexer.fetch_from_BST_int(index, key, fetched_offsets)) {
-                                cerr << "Failed to fetch Offset from Index." << endl;
-                                return;
-                            }
-
-                        } else if constexpr (std::is_same_v<T, std::string>) {
-                            if(!this->indexer.fetch_from_BST_str(index, key, fetched_offsets)) {
-                                cerr << "Failed to fetch Offset from Index." << endl;
-                                return;
-                            }
-                        }
-            }, value); 
-            
-
+            if(!fetch_Value_offset(index, value, fetched_offsets)) {
+                cerr << "Failed to fetch record bank offsets" << endl;
+                return;
+            }
             index.close();
 
-
-            ifstream databank(this->databank_path, ios::binary);
-            if (!databank) {
-                cout << "Failed to Find Databank file." << endl;
+            fstream RecordBank(this->RecordBank_path, ios::binary | ios::in);
+            if (!RecordBank) {
+                cout << "Failed to Find RecordBank file." << endl;
                 return;
             }
             
-            DataBankHeader fetched_header;
-
-            databank.read(reinterpret_cast<char*>(&fetched_header), sizeof(DataBankHeader));
-            
-            if(!this->validate_databank_header(fetched_header)) {
+            if(!this->validate_RecordBank_header(RecordBank)) {
                 cout << "Header not validated." << endl;
                 return;
             }
 
             for (auto fetched_offset : fetched_offsets) {
-                //Now move the read cursor to the offset and get that row.
-                databank.seekg(fetched_offset, ios::beg);
+                
                 Row row;
-                if(!this->fetch(databank, row)) {
-                    cout << "Failed ot fetch row from Databank" << endl;
+                if(!this->fetch(RecordBank, row, fetched_offset)) {
+                    cout << "Failed ot fetch row from RecordBank" << endl;
                     return;
                 }
                 results.push_back(row);
             }
-            databank.close();
+            RecordBank.close();
 
 
         }
 
         void fetchAllRows() {  // Renamed/updated to read all
-            ifstream in(this->databank_path, ios::binary);
-            if (!in) {
+            fstream file(this->RecordBank_path, ios::binary | ios::in);
+            if (!file) {
                 cout << "Failed to Open file" << endl;
                 return;
             }
             
-            DataBankHeader fetched_header;
-
-            in.read(reinterpret_cast<char*>(&fetched_header), sizeof(DataBankHeader));
-            
-            if(!this->validate_databank_header(fetched_header)) {
+            if(!this->validate_RecordBank_header(file)) {
                 cout << "Header not validated." << endl;
                 return;
             }
 
 
             data.clear();  // Reset internal data
-            while (in.peek() != EOF) {
+            while (file.peek() != EOF) {
                 Row row;
-                if (!this->fetch(in, row)) {
-                    if (in.eof()) break;  // Normal end
+                if (!this->fetch(file, row)) {
+                    if (file.eof()) break;  // Normal end
                     cout << "Failed to fetch row." << endl;
                     return;
                 }
