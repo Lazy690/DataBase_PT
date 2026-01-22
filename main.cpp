@@ -5,6 +5,8 @@
 #include <variant>
 #include <fstream>
 #include <filesystem>
+
+#include "indexer.h"
      
 using namespace std;
 namespace fs = std::filesystem;
@@ -46,7 +48,7 @@ class Table {
             out.write(reinterpret_cast<const char*>(&header), sizeof(DataBankHeader));
             return out.good();
         }
-        bool save_Iheader(ostream& out, const IndexHeader& header, const uint8_t& type) {
+        bool save_Iheader(ostream& out, const IndexHeader& header, const uint32_t& type) {
             out.write(reinterpret_cast<const char*>(&header), sizeof(IndexHeader));
             out.write(reinterpret_cast<const char*>(&type), sizeof(type));
             return out.good();
@@ -79,12 +81,12 @@ class Table {
                 return false;
             }
             index.seekp(0, ios::end);
-            int first_pos = index.tellp();
+            //int first_pos = index.tellp();
             
             index.write(reinterpret_cast<const char*>(&id), sizeof(id));
             
             index.write(reinterpret_cast<const char*>(&offset), sizeof(offset));
-            int second_pos = index.tellp();
+            //int second_pos = index.tellp();
             
             return index.good();
         }
@@ -240,12 +242,16 @@ class Table {
         string name;
         vector<Column> schema;
         vector<Row> data;
+        vector<string> index_file_names;
+
+        Indexer indexer;
 
         fs::path folder_path;
         fs::path databank_path;
         fs::path index_path;
 
         Table(string n, const vector<Column>& s) : name(n), schema(s){
+
 
             folder_path = fs::path(this->name);
             fs::create_directories(folder_path);
@@ -276,6 +282,7 @@ class Table {
                     uint8_t index_file_type = static_cast<uint8_t>(column.type);
 
                     string file_name = column.name + ".idx";
+                    index_file_names.push_back(file_name);
                     ofstream index_out(fs::path(index_path) / file_name, ios::binary);
                     if(!this->save_Iheader(index_out, this->Iheader, index_file_type)) {
 
@@ -310,6 +317,23 @@ class Table {
                 return;
             }
 
+            for(int i = 0; i < int(schema.size()); i++) {
+
+                string file_name = schema[i].name + ".idx";
+
+                fstream index_out(fs::path(index_path) / file_name, ios::binary | ios::in | ios::out);
+                
+                switch(schema[i].type) {
+                    
+                    case DataType::INTEIRO:
+                        this->indexer.insert_into_BST_int(index_out, get<int32_t>(row.values[i]), hold_offset);
+                        break;
+
+                    case DataType::TEXTO:
+                        this->indexer.insert_into_BST_str(index_out, get<string>(row.values[i]), hold_offset);
+                        break;
+                }
+            }
         }
 
         void fetchRow_byID(int id, Row& row) {  
@@ -352,6 +376,68 @@ class Table {
 
         }
 
+        void fetchRow_byValue(string& column, variant<int32_t, string>& value, vector<Row>& results) {
+            
+            string file_name = column + ".idx";
+
+            fstream index(fs::path(this->index_path) / file_name, ios::binary | ios::in | ios::out);
+            if(!index) {
+                cerr << "Failed to find ID index file." << endl;
+                return;
+            }
+
+            vector<uint32_t> fetched_offsets;
+            
+            std::visit([&index, &fetched_offsets, this](const auto& key) {
+                    using T = std::decay_t<decltype(key)>;
+                        if constexpr (std::is_same_v<T, int32_t>) {
+                            if(!this->indexer.fetch_from_BST_int(index, key, fetched_offsets)) {
+                                cerr << "Failed to fetch Offset from Index." << endl;
+                                return;
+                            }
+
+                        } else if constexpr (std::is_same_v<T, std::string>) {
+                            if(!this->indexer.fetch_from_BST_str(index, key, fetched_offsets)) {
+                                cerr << "Failed to fetch Offset from Index." << endl;
+                                return;
+                            }
+                        }
+            }, value); 
+            
+
+            index.close();
+
+
+            ifstream databank(this->databank_path, ios::binary);
+            if (!databank) {
+                cout << "Failed to Find Databank file." << endl;
+                return;
+            }
+            
+            DataBankHeader fetched_header;
+
+            databank.read(reinterpret_cast<char*>(&fetched_header), sizeof(DataBankHeader));
+            
+            if(!this->validate_databank_header(fetched_header)) {
+                cout << "Header not validated." << endl;
+                return;
+            }
+
+            for (auto fetched_offset : fetched_offsets) {
+                //Now move the read cursor to the offset and get that row.
+                databank.seekg(fetched_offset, ios::beg);
+                Row row;
+                if(!this->fetch(databank, row)) {
+                    cout << "Failed ot fetch row from Databank" << endl;
+                    return;
+                }
+                results.push_back(row);
+            }
+            databank.close();
+
+
+        }
+
         void fetchAllRows() {  // Renamed/updated to read all
             ifstream in(this->databank_path, ios::binary);
             if (!in) {
@@ -380,23 +466,64 @@ class Table {
                 data.push_back(row);
             }
         }
-
 };
 
 int main() {
 
     vector<Column> columns = {
-        {DataType::TEXTO, "student_id"},
+        {DataType::TEXTO, "student_name"},
         {DataType::INTEIRO, "grade"}
-    };
-
-    vector<Row> rows = {
-        { {"dog", 69} },
-        { {"Pippa", 12} },
-        { {"Dude", 16} }
     };
     
     Table table("Dudes", columns);
-       
+
+    Row add;
+    add.values.push_back("Pippa");
+    add.values.push_back(100);
+    Row add2;
+    add2.values.push_back("Dude");
+    add2.values.push_back(50);
+    Row add3;
+    add3.values.push_back("Yohan the Butcher");
+    add3.values.push_back(25);
+    Row add4;
+    add4.values.push_back("Kirche");
+    add4.values.push_back(99);
+    
+    vector<Row> rows2 = { {add, add2, add3, add4} };
+
+    for (auto i: rows2) {
+        table.appendRow(i);
+    }
+
+    vector<Row> results;
+
+    variant<int32_t, string> key = 25;
+    string col = "grade";
+    
+    Row row;
+    table.fetchRow_byValue(col, key, results);
+
+        
+        int count = 0;
+        for (auto row : results) {
+        for (auto item: row.values) {
+                
+            count ++;
+                visit([](const auto& x) {
+                    using T = std::decay_t<decltype(x)>;
+        
+                    if constexpr (std::is_same_v<T, int32_t>) {
+                        //cout << "Type: int" << endl;
+                        cout << "|| " << x << " ||" << endl;
+                    }
+                    else if constexpr (std::is_same_v<T, std::string>) {
+                        //cout << "Type: str" << endl;
+                        cout << "|| " << x << " ||" << endl;
+                    }
+                }, item);
+            }
+        }
+
     return 0;
 }

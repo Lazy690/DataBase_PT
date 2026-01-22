@@ -32,7 +32,7 @@ class Indexer {
         bool insert_into_BST_int(fstream& file, const int32_t& item, const int32_t& offset_db);
 
         bool fetch_from_BST_str(fstream& file, const string& item, vector<uint32_t>& result);
-        bool fetch_from_BST_int(fstream& file, const int32_t& item, vector<int32_t>& result);
+        bool fetch_from_BST_int(fstream& file, const int32_t& item, vector<uint32_t>& result);
 
 
 

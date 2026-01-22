@@ -437,7 +437,7 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
     }
 }
 
-bool Indexer::fetch_from_BST_int(fstream& file, const int32_t& item, vector<int32_t>& result) {
+bool Indexer::fetch_from_BST_int(fstream& file, const int32_t& item, vector<uint32_t>& result) {
     //capture end of file
     file.seekg(0, ios::end);
     int end_of_file = file.tellg();
