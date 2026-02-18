@@ -21,6 +21,10 @@ struct IndexHeader {
     uint32_t VERSION;
     //This also has a dataType assiciated with it.
 };
+struct MetaDataHeader {
+    uint32_t MAGIC;
+    uint32_t VERSION;
+};  
 
 enum class DataType : uint8_t {
     INTEIRO = 1, //int
@@ -39,6 +43,7 @@ class Table {
     private:
         RecordBankHeader DBheader{0x44415441, 1};
         IndexHeader Iheader{0x44415441, 1};
+        MetaDataHeader MDheader{0x44415441, 1};
 
         uint32_t hold_row_id = 0;
         Row hold_for_indexing;
@@ -53,7 +58,11 @@ class Table {
             file.write(reinterpret_cast<const char*>(&type), sizeof(type));
             return file.good();
         }
-        
+
+        bool save_MDheader(ostream& file, const MetaDataHeader& header) {
+            file.write(reinterpret_cast<const char*>(&header), sizeof(MetaDataHeader));
+            return file.good();
+        }
         
         bool validate_RecordBank_header(fstream& file) {
             
@@ -91,6 +100,126 @@ class Table {
 
             file.seekg(0, ios::beg);
             return true;
+        }
+
+        bool save_table_metadata(ostream& file, const vector<Column>& schema, const string& table_name) {
+
+            int skip_header = sizeof(MetaDataHeader);
+            file.seekp(skip_header, ios::beg);
+
+            //Save table name:
+
+            uint32_t size_of_table_name = table_name.size();
+            file.write(reinterpret_cast<const char*>(&size_of_table_name), sizeof(size_of_table_name));
+            file.write(table_name.data(), size_of_table_name);
+
+            //Save number of columns:
+
+            uint32_t number_of_columns = schema.size();
+            file.write(reinterpret_cast<const char*>(&number_of_columns), sizeof(number_of_columns));
+
+            for (auto column : schema) {
+
+                uint8_t type = 0;
+
+                switch(column.type) {
+                    
+                    case DataType::INTEIRO:
+                        //one for one byte integer
+                        type = 1;
+                        break;
+
+                    case DataType::TEXTO:
+                        //one for one byte integer
+                        type = 2;
+                        break;
+
+                } 
+                if(type == 0) {
+                    cerr << "Invalid column Type detected" << endl;
+                    return false;
+                } 
+                //Write type: 
+                file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+
+                //Write name:
+                uint32_t column_name_size = column.name.size();
+                file.write(reinterpret_cast<const char*>(&column_name_size), sizeof(column_name_size));
+                file.write(column.name.data(), column_name_size);
+
+            }
+
+            cout << "Finished saving metadata." << endl;
+            return file.good();
+        }
+
+        bool load_table_metadata(istream& file, vector<Column>& schema, string& table_name) {
+
+            int skip_header = sizeof(MetaDataHeader);
+            file.seekg(skip_header, ios::beg);
+
+            //Load table name:
+
+            uint32_t size_of_table_name = 0;
+
+            file.read(reinterpret_cast<char*>(&size_of_table_name), sizeof(size_of_table_name));
+            if(!size_of_table_name == 0) {
+                //cout << "Size of table name: " << size_of_table_name << endl;
+                table_name.resize(size_of_table_name);
+                file.read(table_name.data(), size_of_table_name);
+                //cout << "Table name: " << table_name << endl;
+            }
+            else {
+                cerr << "Invalid table name lenght" << endl;
+                return false;
+            }
+
+            //Load number of columns:
+
+            uint32_t number_of_columns = 0;
+            file.read(reinterpret_cast<char*>(&number_of_columns), sizeof(number_of_columns));
+
+            for (int i = 0; i < int(number_of_columns); i++) {
+
+                Column column;
+
+                uint8_t type = 0;
+
+                //read type: 
+                file.read(reinterpret_cast<char*>(&type), sizeof(type));
+                
+                if(type == 0) {
+                    cerr << "Invalid column Type detected" << endl;
+                    return false;
+                } 
+                
+                column.type = static_cast<DataType>(type);
+
+                //Read name:
+                string column_name;
+                uint32_t column_name_size = 0;
+                file.read(reinterpret_cast<char*>(&column_name_size), sizeof(column_name_size));
+
+                if(!column_name_size == 0) {
+
+                    column_name.resize(column_name_size);
+                    file.read(column_name.data(), column_name_size);
+
+                    column.name = column_name;
+
+                }
+                else {
+                    cerr << "Invalid table name lenght" << endl;
+                    return false;
+                }
+
+                schema.push_back(column);
+
+            }
+
+            cout << "Finished loading metadata." << endl;
+            return file.good();
+
         }
 
         //==================================================================
@@ -335,48 +464,94 @@ class Table {
 
         fs::path folder_path;
         fs::path RecordBank_path;
+        fs::path Metadata_path;
         fs::path index_path;
 
-        Table(string n, const vector<Column>& s) : name(n), schema(s){
-
+        //Table(string n, const vector<Column>& s) : name(n), schema(s){
+        Table(string n) : name(n){
 
             folder_path = fs::path(this->name);
-            fs::create_directories(folder_path);
+            this->name.clear(); //DO NOT FORGET TO DELETE OR COMMENT THIS!!!
             
-            RecordBank_path = fs::path(folder_path) / "RecordBank.bin";
-            if(!fs::exists(RecordBank_path)) {
-                ofstream ofs(RecordBank_path, ios::binary);
-                if(!this->save_DBheader(ofs, this->DBheader)) {
-                    cout << "Failed to initiate RecordBank." << endl;
+            if(!fs::exists(folder_path)) {
+                
+                fs::create_directories(folder_path);
+                
+                Metadata_path = fs::path(folder_path) / "MetaData.bin";
+                if(!fs::exists(Metadata_path)) {
+                    cout << "Creating metadata." << endl;
+                    ofstream ofs(fs::path(Metadata_path), ios::binary);
+                    if(!this->save_MDheader(ofs, this->MDheader)) {
+                        cout << "Failed to save metadata header." << endl;
+                    }
+
+                    if(!this->save_table_metadata(ofs, this->schema, this->name)) {
+                        cerr << "Failed to Save metadata" << endl;
+                    }
+
+                }
+
+                RecordBank_path = fs::path(folder_path) / "RecordBank.bin";
+                if(!fs::exists(RecordBank_path)) {
+                    ofstream ofs(RecordBank_path, ios::binary);
+                    if(!this->save_DBheader(ofs, this->DBheader)) {
+                        cout << "Failed to initiate RecordBank." << endl;
+                    }
+                }
+
+                index_path = fs::path(folder_path) / "index";
+                if(!fs::exists(index_path)) {
+                    fs::create_directories(index_path);
+                    ofstream id_out(fs::path(index_path) / "id.idx");
+                    
+                    uint32_t ID_index_file_type = 1;
+
+                    if(!this->save_Iheader(id_out, this->Iheader, ID_index_file_type)) {
+
+                        cout << "Failed to initiate ID index." << endl;
+
+                    }
+                    id_out.close();
+                    for(auto& column: this->schema) {
+
+                        uint8_t index_file_type = static_cast<uint8_t>(column.type);
+
+                        string file_name = column.name + ".idx";
+                        index_file_names.push_back(file_name);
+                        ofstream index_out(fs::path(index_path) / file_name, ios::binary);
+                        if(!this->save_Iheader(index_out, this->Iheader, index_file_type)) {
+
+                            cout << "Failed to initiate " << column.name << " index." << endl;
+
+                        }
+                    }
                 }
             }
 
-            index_path = fs::path(folder_path) / "index";
-            if(!fs::exists(index_path)) {
-                fs::create_directories(index_path);
-                ofstream id_out(fs::path(index_path) / "id.idx");
+            else {
+
+                Metadata_path = fs::path(folder_path) / "MetaData.bin";
+                RecordBank_path = fs::path(folder_path) / "RecordBank.bin";
+                index_path = fs::path(folder_path) / "index";
+
                 
-                uint32_t ID_index_file_type = 1;
-
-                if(!this->save_Iheader(id_out, this->Iheader, ID_index_file_type)) {
-
-                    cout << "Failed to initiate ID index." << endl;
-
+                cout << "Loading metadata." << endl;
+                ifstream ins(fs::path(Metadata_path), ios::binary);
+                //if(!this->validate_MDheader(ofs, this->MDheader)) {
+                //    cout << "Failed to save metadata header." << endl;
+                //}
+                
+                if(!this->load_table_metadata(ins, this->schema, this->name)) {
+                    cerr << "Failed to Load metadata" << endl;
                 }
-                id_out.close();
-                for(auto& column: this->schema) {
 
-                    uint8_t index_file_type = static_cast<uint8_t>(column.type);
+                cout << "Table name: " << this->name << endl;
+                cout << "Schema: " << endl;
+                for (auto col : schema) {
+                    cout << "Name: " << col.name << endl;
+                    cout << "-----------------------" << endl;
+                }                
 
-                    string file_name = column.name + ".idx";
-                    index_file_names.push_back(file_name);
-                    ofstream index_out(fs::path(index_path) / file_name, ios::binary);
-                    if(!this->save_Iheader(index_out, this->Iheader, index_file_type)) {
-
-                        cout << "Failed to initiate " << column.name << " index." << endl;
-
-                    }
-                }
             }
 
             cout << "Table: " << this->name << " Created." << endl;
@@ -385,7 +560,7 @@ class Table {
         void appendRow(const Row& row) {
             
             fstream RecordBank(this->RecordBank_path, ios::binary | ios::in | ios::out);
-            if (!file) {
+            if (!RecordBank) {
                 cout << "Failed to Open file when Appending." << endl;
                 return;
             }
@@ -402,7 +577,7 @@ class Table {
                 cout << "Failed to append row." << endl;
                 return;
             }
-            file.close();
+            RecordBank.close();
 
             if(!this->save_ID_record(hold_id, hold_offset)) {
                 cout << "Failed to Index ID." << endl;
@@ -521,13 +696,11 @@ class Table {
 
 int main() {
 
-    vector<Column> columns = {
-        {DataType::TEXTO, "student_name"},
-        {DataType::INTEIRO, "grade"}
-    };
     
-    Table table("Dudes", columns);
+    
+    Table table("Dudes");
 
+   
     Row add;
     add.values.push_back("Pippa");
     add.values.push_back(100);
@@ -575,6 +748,7 @@ int main() {
                 }, item);
             }
         }
+   
 
     return 0;
 }

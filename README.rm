@@ -20,3 +20,10 @@ Current ID index file format:
 
     This jumps directly to the id, so no binary seach tree needed, its the fastest way to fetch a row
     as it is O(1).
+
+Current MetaData file format:
+
+    [[Magic][Version]] -> [len][Table name] -> [Number of Columns] -> [Type] -> [len][column name]
+
+    Header = 8 bytes
+    Type = 1 byte
