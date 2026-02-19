@@ -8,8 +8,8 @@ Current Databank file format:                             One Byte
 
 Current ID index file format:
 
-    [[Magic][Version]][type] -> [Value][offset] -- > Always 4 + 4 bytes wide.
-        Header = 8 bytes
+    [[Magic][Version][type]] -> [Value][offset] -- > Always 4 + 4 bytes wide.
+        Header = 12 bytes
         Type = always 1 byte
 
     Formila for getting the id you want:
@@ -27,3 +27,21 @@ Current MetaData file format:
 
     Header = 8 bytes
     Type = 1 byte
+
+Cureent BST Secondary (value) index file format:
+
+    [[Magic][Version][type]] ----int----> [Value][offset][overflow offset][right pointer][left pointer]
+                             |              
+                             ----str----> [len][value][overflow offset][right pointer][left pointer]
+                             |
+                             ----double-> [Value][offset][overflow offset][right pointer][left pointer]
+    
+        Header = 12 bytes
+        int value = 4 bytes
+        len(uint34_t) = 4 bytes
+        str value = len
+        double value = 8 bytes
+        offset = 4 bytes
+        pointers (overflow offset, right pointer, left pointer) = 4 bytes
+
+        Note: overflow offset is for recording the location of due values (keys) in a linked list.

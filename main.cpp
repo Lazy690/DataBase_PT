@@ -515,12 +515,10 @@ class Table {
         fs::path Metadata_path;
         fs::path index_path;
 
-        //Table(string n, const vector<Column>& s) : name(n), schema(s){
-        Table(string n) : name(n){
+        Table(string n, const vector<Column>& s = {}) : name(n), schema(s){
 
             folder_path = fs::path(this->name);
-            this->name.clear(); //DO NOT FORGET TO DELETE OR COMMENT THIS!!!
-            
+        
             if(!fs::exists(folder_path)) {
                 
                 fs::create_directories(folder_path);
@@ -575,8 +573,11 @@ class Table {
                     }
                 }
             }
-
+            //If the table already exists
             else {
+
+                this->name.clear(); 
+                this->schema.clear();
 
                 Metadata_path = fs::path(folder_path) / "MetaData.bin";
                 RecordBank_path = fs::path(folder_path) / "RecordBank.bin";
@@ -747,19 +748,19 @@ class Table {
 
 int main() {
 
-    //vector<Column> columns = {
-        //{DataType::TEXTO, "student_name"},
-        //{DataType::INTEIRO, "grade"},
-        //{DataType::REAL, "percentage"}
-    //};
+    vector<Column> columns = {
+        {DataType::TEXTO, "student_name"},
+        {DataType::INTEIRO, "grade"},
+        {DataType::REAL, "percentage"}
+    };
     
-    //Table table("Dudes", columns);
     Table table("Dudes");
+    //Table table("Dudes");
 
 
     vector<Row> results;
 
-    variant<int32_t, string, double> key = 99.99;
+    variant<int32_t, string, double> key = 0.5;
     string col = "percentage";
     
     Row row;
