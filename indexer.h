@@ -23,6 +23,7 @@ class Indexer {
 
         bool append_new_key_str(fstream& file, const string& item, const uint32_t& offset_db);
         bool append_new_key_int(fstream& file, const int32_t& item, const uint32_t& offset_db);
+        bool append_new_key_double(fstream& file, const double& item, const uint32_t& offset_db);
 
     public:
 
@@ -30,9 +31,11 @@ class Indexer {
 
         bool insert_into_BST_str(fstream& file, const string& item, const int32_t& offset_db);
         bool insert_into_BST_int(fstream& file, const int32_t& item, const int32_t& offset_db);
+        bool insert_into_BST_double(fstream& file, const double& item, const int32_t& offset_db);
 
         bool fetch_from_BST_str(fstream& file, const string& item, vector<uint32_t>& result);
         bool fetch_from_BST_int(fstream& file, const int32_t& item, vector<uint32_t>& result);
+        bool fetch_from_BST_double(fstream& file, const double& item, vector<uint32_t>& result);
 
 
 

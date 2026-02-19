@@ -6,7 +6,7 @@ using namespace std;
 Indexer::Indexer() {}
 
 bool Indexer::write_offset_pointers(fstream& file, const uint32_t& offset_db) {
-    //Save databank offset
+    //Save DataBank offset
     file.write(reinterpret_cast<const char*>(&offset_db), sizeof(offset_db));
 
     //Save the overflow pointer for dupe keys:
@@ -23,7 +23,7 @@ bool Indexer::write_offset_pointers(fstream& file, const uint32_t& offset_db) {
     return file.good();
 }
 bool Indexer::write_overflow_pointer(fstream& file, const uint32_t& offset_db) {
-    //Save databank offset
+    //Save DataBank offset
     file.write(reinterpret_cast<const char*>(&offset_db), sizeof(offset_db));
 
     //Save the overflow pointer for dupe keys:
@@ -54,6 +54,20 @@ bool Indexer::append_new_key_int(fstream& file, const int32_t& item, const uint3
     }
     return file.good();
 }
+bool Indexer::append_new_key_double(fstream& file, const double& item, const uint32_t& offset_db) {
+    file.seekp(0, ios::end);
+    //Write key value
+    file.write(reinterpret_cast<const char*>(&item), sizeof(item));
+
+    if(!this->write_offset_pointers(file, offset_db)) {
+        cerr << "Failed to save empty pointers." << endl;
+    }
+    return file.good();
+}
+
+//================================================================================
+//==========                                                            ==========
+//================================================================================
 
 bool Indexer::insert_into_BST_str(fstream& file, const string& item, const int32_t& offset_db) {
     //capture end of file
@@ -78,11 +92,11 @@ bool Indexer::insert_into_BST_str(fstream& file, const string& item, const int32
     file.seekp(0, ios::beg);
     file.seekg(12, ios::beg);
 
-    int count = 1;
+    //int count = 1;
     //Tree traversal
     while(true) {
-        cout << count << endl;
-        count++;
+        //cout << count << endl;
+        //count++;
 
         uint32_t appended_offset = 0;
         uint32_t key_len = 0;
@@ -337,6 +351,146 @@ bool Indexer::insert_into_BST_int(fstream& file, const int32_t& item, const int3
     }
 }
 
+bool Indexer::insert_into_BST_double(fstream& file, const double& item, const int32_t& offset_db) {
+
+    //capture end of file
+    file.seekg(0, ios::end);
+    int end_of_file = file.tellg();
+  
+    //skip header
+    file.seekg(12, ios::beg);
+      
+    //if no root found
+    if (file.tellg() == end_of_file ) {
+        cout << "No root found" << endl;
+        cout << "Appending to root" << endl;
+        if(!this->append_new_key_double(file, item, offset_db)) {
+            cerr << "Failed to save root" << endl;
+            return false;
+        }
+          
+        return file.good();
+    }
+    //reset read and write cursors
+    file.seekp(0, ios::beg);
+    file.seekg(12, ios::beg);
+  
+    //Tree traversal
+    while(true) {
+        uint32_t appended_offset = 0;
+        int32_t key = 0;
+        //read the next key
+        file.read(reinterpret_cast<char*>(&key), sizeof(key));
+  
+        if(key == item) {
+  
+            while(true) {
+                //jump 4 bytes to overflow pointer and save the pointers location
+                file.seekg(4, ios::cur);
+                int overflow_pointer_location = file.tellg();
+                int32_t overflow_pointer = 0;
+                file.read(reinterpret_cast<char*>(&overflow_pointer), sizeof(overflow_pointer));
+  
+                if(overflow_pointer == -1) {
+  
+                    //move write pointer to the end to append, record the new appended offset
+                    file.seekp(0, ios::end);
+                      
+                    appended_offset = file.tellp();
+                    if(!this->write_overflow_pointer(file, offset_db)) {
+                        cout << "Failed to append to the dupe pointer" << endl;
+                        return false;
+                    }
+  
+                    //Go back and change -1 to the new location it pointes to
+                    file.seekp(overflow_pointer_location, ios::beg);
+                    file.write(reinterpret_cast<const char*>(&appended_offset), sizeof(appended_offset));
+                    cout << "Found empty dupe pointer and appended it." << endl;
+                    return file.good(); 
+  
+                }
+                else if(overflow_pointer > 0) {
+  
+                    file.seekg(overflow_pointer, ios::beg);
+                    continue;
+  
+                }
+            }
+  
+        }
+  
+        else if(key > item) {
+            //jump 8 bytes to left pointer and save the pointers location
+            file.seekg(8, ios::cur);
+            int left_pointer_location = file.tellg();
+            int32_t left_pointer = 0;
+            file.read(reinterpret_cast<char*>(&left_pointer), sizeof(left_pointer));
+  
+            if(left_pointer == -1) {
+  
+                //move write pointer to the end to append, record the new appended offset
+                file.seekp(0, ios::end);
+                  
+                appended_offset = file.tellp();
+                if(!this->append_new_key_double(file, item, offset_db)) {
+                    cout << "Failed to append to the left pointer" << endl;
+                    return false;
+                }
+  
+                //Go back and change -1 to the new location it pointes to
+                file.seekp(left_pointer_location, ios::beg);
+                file.write(reinterpret_cast<const char*>(&appended_offset), sizeof(appended_offset));
+                cout << "Found empty left pointer and appended it." << endl;
+                return file.good(); 
+  
+            }
+            else if(left_pointer > 0) {
+  
+                file.seekg(left_pointer, ios::beg);
+                continue;
+  
+            }
+              
+        }
+        //If item is greater then key
+        else if(key < item) {
+            //jump 12 bytes to right pointer and save the pointers location
+            file.seekg(12, ios::cur);
+            int right_pointer_location = file.tellg();
+            int32_t right_pointer = 0;
+            file.read(reinterpret_cast<char*>(&right_pointer), sizeof(right_pointer));
+  
+            if(right_pointer == -1) {
+  
+                //move write pointer to the end to append, record the new appended offset
+                file.seekp(0, ios::end);
+                appended_offset = file.tellp();
+  
+                if(!this->append_new_key_double(file, item, offset_db)) {
+                    cout << "Failed to append to the right pointer" << endl;
+                    return false;
+                }
+  
+                //Go back and change -1 to the new location it pointes to
+                file.seekp(right_pointer_location, ios::beg);
+                file.write(reinterpret_cast<const char*>(&appended_offset), sizeof(appended_offset));
+                cout << "Found empty right pointer and appended it." << endl;
+                return file.good(); 
+  
+            }
+            else if(right_pointer > 0) {
+  
+                file.seekg(right_pointer, ios::beg);
+                continue;
+  
+            }
+              
+        }
+  
+    }
+
+}
+
 bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint32_t>& result) {
     //capture end of file
     file.seekg(0, ios::end);
@@ -367,18 +521,18 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
 
             cout << "Match found" << endl;
             uint32_t overflow_offset = 0;
-            uint32_t data_bank_offset = 0;
+            uint32_t record_bank_offset = 0;
 
-            file.read(reinterpret_cast<char*>(&data_bank_offset), sizeof(data_bank_offset ));
+            file.read(reinterpret_cast<char*>(&record_bank_offset), sizeof(record_bank_offset ));
 
             file.read(reinterpret_cast<char*>(&overflow_offset), sizeof(overflow_offset));
             if (int(overflow_offset) == -1) {
-                result.push_back(data_bank_offset);
+                result.push_back(record_bank_offset);
                 return file.good();
             }
             else if (int(overflow_offset)> 0) {
               
-                result.push_back(data_bank_offset);
+                result.push_back(record_bank_offset);
                 while(int(overflow_offset)!= -1) {
                     int32_t duped_offset = 0;
                     file.seekg(overflow_offset, ios::beg);
@@ -461,17 +615,17 @@ bool Indexer::fetch_from_BST_int(fstream& file, const int32_t& item, vector<uint
         if(key == item) {
 
             uint32_t overflow_offset = 0;
-            uint32_t data_bank_offset = 0;
+            uint32_t record_bank_offset = 0;
 
-            file.read(reinterpret_cast<char*>(&data_bank_offset), sizeof(data_bank_offset ));
+            file.read(reinterpret_cast<char*>(&record_bank_offset), sizeof(record_bank_offset ));
 
             file.read(reinterpret_cast<char*>(&overflow_offset), sizeof(overflow_offset));
             if (int(overflow_offset)== -1) {
-                result.push_back(data_bank_offset);
+                result.push_back(record_bank_offset);
                 return file.good();
             }
             else if (int(overflow_offset)> 0) {
-                result.push_back(data_bank_offset);
+                result.push_back(record_bank_offset);
                 while(int(overflow_offset)!= -1) {
                     int32_t duped_offset = 0;
                     file.seekg(overflow_offset, ios::beg);
@@ -527,12 +681,101 @@ bool Indexer::fetch_from_BST_int(fstream& file, const int32_t& item, vector<uint
     }
 }
 
+bool Indexer::fetch_from_BST_double(fstream& file, const double& item, vector<uint32_t>& result) {
+    //capture end of file
+    file.seekg(0, ios::end);
+    int end_of_file = file.tellg();
+
+    //skip header
+    file.seekg(12, ios::beg);
+    
+    //if no root found
+    if (file.tellg() == end_of_file ) {
+        cout << "Index is empty" << endl;
+        return file.good();
+    }
+
+    //Tree search traversal
+    while(true) {
+        double key = 0;
+
+        //read the next key
+        file.read(reinterpret_cast<char*>(&key), sizeof(key));
+        //match found:
+        if(key == item) {
+
+            uint32_t overflow_offset = 0;
+            uint32_t record_bank_offset = 0;
+
+            file.read(reinterpret_cast<char*>(&record_bank_offset), sizeof(record_bank_offset ));
+
+            file.read(reinterpret_cast<char*>(&overflow_offset), sizeof(overflow_offset));
+            if (int(overflow_offset)== -1) {
+                result.push_back(record_bank_offset);
+                return file.good();
+            }
+            else if (int(overflow_offset)> 0) {
+                result.push_back(record_bank_offset);
+                while(int(overflow_offset)!= -1) {
+                    int32_t duped_offset = 0;
+                    file.seekg(overflow_offset, ios::beg);
+
+                    file.read(reinterpret_cast<char*>(&duped_offset), sizeof(duped_offset));
+                    result.push_back(duped_offset);
+
+                    file.read(reinterpret_cast<char*>(&overflow_offset), sizeof(overflow_offset));   
+                }
+                return file.good();
+            }
+
+        }
+        else if(key > item) {
+            //jump 8 bytes to left pointer and save the pointers location
+            file.seekg(8, ios::cur);
+            int32_t left_pointer = 0;
+            file.read(reinterpret_cast<char*>(&left_pointer), sizeof(left_pointer));
+            if(left_pointer == -1) {
+
+                cout << "No match Found." << endl;
+                return file.good();
+
+            }
+            else if(left_pointer > 0) {
+
+                file.seekg(left_pointer, ios::beg);
+                continue;
+
+            }
+        }
+        //If item is greater then key
+        else if(key < item) {
+            //jump 12 bytes to left pointer and save the pointers location
+            file.seekg(12, ios::cur);
+            int32_t right_pointer = 0;
+            file.read(reinterpret_cast<char*>(&right_pointer), sizeof(right_pointer));
+
+            if(right_pointer == -1) {
+
+                cout << "No match Found." << endl;
+                return file.good();
+
+            }
+            else if(right_pointer > 0) {
+
+                file.seekg(right_pointer, ios::beg);
+                continue;
+
+            }
+        }
+
+    }
+}
 
 bool Indexer::test(fstream& file, int32_t& item, uint32_t& offset_db) {
     cout << file.tellg() << endl;
     //Write key value
     file.read(reinterpret_cast<char*>(&item), sizeof(item));
-    //Save databank offset
+    //Save DataBank offset
     file.read(reinterpret_cast<char*>(&offset_db), sizeof(offset_db));
     //Save left and right pointer, its -1 because theres no children yet
     int32_t left_pointer = 0;
@@ -583,7 +826,7 @@ void Indexer::test_storage_str() {
         }
 
         for(auto result: results) {
-            cout << "The target: " << key << " is in offset: " << result << " of the databank." << endl;
+            cout << "The target: " << key << " is in offset: " << result << " of the DataBank." << endl;
         }
     }
 

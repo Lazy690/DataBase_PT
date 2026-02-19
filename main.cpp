@@ -28,7 +28,8 @@ struct MetaDataHeader {
 
 enum class DataType : uint8_t {
     INTEIRO = 1, //int
-    TEXTO = 2 //string
+    TEXTO = 2, //string
+    REAL = 3 //double
 };
 
 struct Column {
@@ -36,7 +37,7 @@ struct Column {
     string name;  
 };
 struct Row {
-    vector<variant<int32_t,  string>> values;
+    vector<variant<int32_t,  string, double>> values;
 };
 
 class Table {
@@ -101,6 +102,24 @@ class Table {
             file.seekg(0, ios::beg);
             return true;
         }
+        bool validate_Metadata_header(istream& file) {
+            
+            MetaDataHeader header;
+
+            file.read(reinterpret_cast<char*>(&header), sizeof(MetaDataHeader));
+            
+            if(header.MAGIC != this->Iheader.MAGIC) {
+                cerr << "Invalid Magic" << endl;
+                return false;
+            }
+            else if(header.VERSION != this->Iheader.VERSION) {
+                cerr << "Invalid Version" << endl;
+                return false;
+            }
+
+            file.seekg(0, ios::beg);
+            return true;
+        }
 
         bool save_table_metadata(ostream& file, const vector<Column>& schema, const string& table_name) {
 
@@ -130,8 +149,13 @@ class Table {
                         break;
 
                     case DataType::TEXTO:
-                        //one for one byte integer
+                        
                         type = 2;
+                        break;
+                    
+                    case DataType::REAL:
+                    
+                        type = 3;
                         break;
 
                 } 
@@ -267,6 +291,7 @@ class Table {
                 switch(schema[i].type) {
                     
                     case DataType::INTEIRO:
+                        cout << "Inserting into index: " << get<int32_t>(row.values[i]) << endl;
                         if(!this->indexer.insert_into_BST_int(index_out, get<int32_t>(row.values[i]), hold_offset)) {
                             cerr << "Failed to save Index record." << endl;
                             return false;
@@ -274,7 +299,16 @@ class Table {
                         break;
 
                     case DataType::TEXTO:
+                        cout << "Inserting into index: " << get<string>(row.values[i]) << endl;
                         if(!this->indexer.insert_into_BST_str(index_out, get<string>(row.values[i]), hold_offset)) {
+                            cerr << "Failed to save Index record." << endl;
+                            return false;
+                        }
+                        break;
+
+                    case DataType::REAL:
+                        cout << "Inserting into index: " << get<double>(row.values[i]) << endl;
+                        if(!this->indexer.insert_into_BST_double(index_out, get<double>(row.values[i]), hold_offset)) {
                             cerr << "Failed to save Index record." << endl;
                             return false;
                         }
@@ -319,7 +353,7 @@ class Table {
 
         };
 
-        bool fetch_Value_offset(fstream& file, variant<int32_t, string>& value, vector<uint32_t>& fetched_offsets) {
+        bool fetch_Value_offset(fstream& file, variant<int32_t, string, double>& value, vector<uint32_t>& fetched_offsets) {
 
             std::visit([&file, &fetched_offsets, this](const auto& key) {
                 using T = std::decay_t<decltype(key)>;
@@ -327,6 +361,8 @@ class Table {
                         this->indexer.fetch_from_BST_int(file, key, fetched_offsets);
                     } else if constexpr (std::is_same_v<T, std::string>) {
                         this->indexer.fetch_from_BST_str(file, key, fetched_offsets);
+                    } else if constexpr (std::is_same_v<T, double>) {
+                        this->indexer.fetch_from_BST_double(file, key, fetched_offsets);
                     }
             }, value); 
 
@@ -387,8 +423,13 @@ class Table {
                             uint32_t len = static_cast<uint32_t>(payload.size());
                             file.write(reinterpret_cast<const char*>(&len), sizeof(len));
                             file.write(payload.data(), len);
-                    
 
+                        } else if constexpr (std::is_same_v<T, double>) {
+
+                            uint8_t type = 3;
+                            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                            file.write(reinterpret_cast<const char*>(&payload), sizeof(payload));  // 4 bytes for double
+            
                         }
                 }, value);
             }
@@ -442,6 +483,13 @@ class Table {
                         file.read(payload_str.data(), len);
                         if (!file) return false;
                         row.values.push_back(payload_str);
+                        break;
+                    }
+                    case DataType::REAL: {
+                        double payload_double;
+                        file.read(reinterpret_cast<char*>(&payload_double), sizeof(payload_double));
+                        if (!file) return false;
+                        row.values.push_back(payload_double);
                         break;
                     }
                     default:
@@ -537,10 +585,13 @@ class Table {
                 
                 cout << "Loading metadata." << endl;
                 ifstream ins(fs::path(Metadata_path), ios::binary);
+                
                 //if(!this->validate_MDheader(ofs, this->MDheader)) {
                 //    cout << "Failed to save metadata header." << endl;
                 //}
-                
+                if(!this->validate_Metadata_header(ins)) {
+                    cerr << "Invalid or outdated metadata header." << endl; 
+                }
                 if(!this->load_table_metadata(ins, this->schema, this->name)) {
                     cerr << "Failed to Load metadata" << endl;
                 }
@@ -625,13 +676,13 @@ class Table {
 
         }
 
-        void fetchRow_byValue(string& column, variant<int32_t, string>& value, vector<Row>& results) {
+        void fetchRow_byValue(string& column, variant<int32_t, string, double>& value, vector<Row>& results) {
             
             string file_name = column + ".idx";
 
             fstream index(fs::path(this->index_path) / file_name, ios::binary | ios::in | ios::out);
             if(!index) {
-                cerr << "Failed to find ID index file." << endl;
+                cerr << "Failed to find Value index file." << endl;
                 return;
             }
 
@@ -696,34 +747,20 @@ class Table {
 
 int main() {
 
+    //vector<Column> columns = {
+        //{DataType::TEXTO, "student_name"},
+        //{DataType::INTEIRO, "grade"},
+        //{DataType::REAL, "percentage"}
+    //};
     
-    
+    //Table table("Dudes", columns);
     Table table("Dudes");
 
-   
-    Row add;
-    add.values.push_back("Pippa");
-    add.values.push_back(100);
-    Row add2;
-    add2.values.push_back("Dude");
-    add2.values.push_back(50);
-    Row add3;
-    add3.values.push_back("Yohan the Butcher");
-    add3.values.push_back(25);
-    Row add4;
-    add4.values.push_back("Kirche");
-    add4.values.push_back(99);
-    
-    vector<Row> rows2 = { {add, add2, add3, add4} };
-
-    for (auto i: rows2) {
-        table.appendRow(i);
-    }
 
     vector<Row> results;
 
-    variant<int32_t, string> key = 25;
-    string col = "grade";
+    variant<int32_t, string, double> key = 99.99;
+    string col = "percentage";
     
     Row row;
     table.fetchRow_byValue(col, key, results);
@@ -742,6 +779,10 @@ int main() {
                         cout << "|| " << x << " ||" << endl;
                     }
                     else if constexpr (std::is_same_v<T, std::string>) {
+                        //cout << "Type: str" << endl;
+                        cout << "|| " << x << " ||" << endl;
+                    }
+                    else if constexpr (std::is_same_v<T, double>) {
                         //cout << "Type: str" << endl;
                         cout << "|| " << x << " ||" << endl;
                     }
