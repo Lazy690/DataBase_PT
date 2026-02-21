@@ -326,7 +326,7 @@ class Table {
             }
 
             //9 is the size of the header + one byte for the type
-            int header_size = 9;
+            int header_size = 12;
             file.seekg(header_size, ios::beg);
             //8 is because each entry is always 8 bytes wide: [value][offset in bank]
             int id_location_offset = (ID - 1) * 8;
@@ -341,7 +341,8 @@ class Table {
             int32_t value = 0;
 
             file.read(reinterpret_cast<char*>(&value), sizeof(value));
-           
+            cout << "id: " << ID << endl;
+            cout << "value: " << value << endl;
             if(value != ID) {
                 cerr << "Id not found" << endl;
                 return false;
@@ -394,6 +395,10 @@ class Table {
             //Capture the offset of the start of the row were going to save to use in the indexer:
 
             hold_offset = file.tellp();
+
+            //write Tumbstone bytes:
+            int32_t tumbstoned = 0;
+            file.write(reinterpret_cast<const char*>(&tumbstoned), sizeof(tumbstoned));
 
             //write an empty space to later store the offset of the end of the row:
             int32_t end_of_row_offset = -1;
@@ -453,50 +458,81 @@ class Table {
                 file.seekg(fetched_offset, ios::beg);
             }
 
-            //get the offset of end of the row:
-            int32_t end_of_row_offset = 0;
-            file.read(reinterpret_cast<char*>(&end_of_row_offset), sizeof(end_of_row_offset));
-            
-            while(true) {
+            //check Tumbstone bytes:
+            int32_t tumbstoned = -1;
+            file.read(reinterpret_cast<char*>(&tumbstoned), sizeof(tumbstoned));
+            cout << "Tumbstone: " << tumbstoned << endl;
+            if(tumbstoned == 0 && tumbstoned != -1) {
 
-                if(file.tellg() == end_of_row_offset) break;   
+                //get the offset of end of the row:
+                int32_t end_of_row_offset = 0;
+                file.read(reinterpret_cast<char*>(&end_of_row_offset), sizeof(end_of_row_offset));
                 
-                uint8_t type_int;
-                file.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
-                if (!file) return false;
-                DataType type = static_cast<DataType>(type_int);
+                while(true) {
 
-                switch (type) {
-                    case DataType::INTEIRO: {
-                        int32_t payload_int;
-                        file.read(reinterpret_cast<char*>(&payload_int), sizeof(payload_int));
-                        if (!file) return false;
-                        row.values.push_back(payload_int);
-                        break;
+                    if(file.tellg() == end_of_row_offset) break;   
+                    
+                    uint8_t type_int;
+                    file.read(reinterpret_cast<char*>(&type_int), sizeof(type_int));
+                    if (!file) return false;
+                    DataType type = static_cast<DataType>(type_int);
+
+                    switch (type) {
+                        case DataType::INTEIRO: {
+                            int32_t payload_int;
+                            file.read(reinterpret_cast<char*>(&payload_int), sizeof(payload_int));
+                            if (!file) return false;
+                            row.values.push_back(payload_int);
+                            break;
+                        }
+                        case DataType::TEXTO: {
+                            uint32_t len;
+                            file.read(reinterpret_cast<char*>(&len), sizeof(len));
+                            if (!file) return false;
+                            string payload_str;
+                            payload_str.resize(len);
+                            file.read(payload_str.data(), len);
+                            if (!file) return false;
+                            row.values.push_back(payload_str);
+                            break;
+                        }
+                        case DataType::REAL: {
+                            double payload_double;
+                            file.read(reinterpret_cast<char*>(&payload_double), sizeof(payload_double));
+                            if (!file) return false;
+                            row.values.push_back(payload_double);
+                            break;
+                        }
+                        default:
+                            return false; // Unknown type
                     }
-                    case DataType::TEXTO: {
-                        uint32_t len;
-                        file.read(reinterpret_cast<char*>(&len), sizeof(len));
-                        if (!file) return false;
-                        string payload_str;
-                        payload_str.resize(len);
-                        file.read(payload_str.data(), len);
-                        if (!file) return false;
-                        row.values.push_back(payload_str);
-                        break;
-                    }
-                    case DataType::REAL: {
-                        double payload_double;
-                        file.read(reinterpret_cast<char*>(&payload_double), sizeof(payload_double));
-                        if (!file) return false;
-                        row.values.push_back(payload_double);
-                        break;
-                    }
-                    default:
-                        return false; // Unknown type
                 }
             }
+            else if(tumbstoned == 1 && tumbstoned !=-1) {
+                cout << "Row was deleted." << endl;
+            }
+            else {
+                cerr << "Invalid Tumbstone byte." << endl;
+                return false;
+            }
             return true;
+        }
+
+        bool deleteRow(fstream& file, int fetched_offset = -1) {
+
+            
+                
+            file.seekp(fetched_offset, ios::beg);
+            
+
+            //change Tumbstone bytes to true:
+            int32_t tumbstoned = 1;
+            file.write(reinterpret_cast<const char*>(&tumbstoned), sizeof(tumbstoned));
+            file.seekg(fetched_offset, ios::beg);
+            int32_t tumb = -1;
+            file.read(reinterpret_cast<char*>(&tumb), sizeof(tumb));
+            cout << "Tumbstone value after writting it on delete: " << tumb << endl;
+            return file.good();
         }
 
     public:
@@ -645,7 +681,7 @@ class Table {
 
         void fetchRow_byID(int id, Row& row) {  
            
-            fstream index(fs::path(this->index_path) / "id.idx", ios::binary | ios::in);
+            fstream index(fs::path(index_path) / "id.idx", ios::binary | ios::in);
             if(!index) {
                 cerr << "Failed to find ID index file." << endl;
                 return;
@@ -670,8 +706,10 @@ class Table {
                 return;
             }
 
+            cout << "Fected offset from fetch: " << fetched_offset << endl;
+
             if(!this->fetch(RecordBank, row, fetched_offset)) {
-                cout << "Failed ot fetch row from RecordBank" << endl;
+                cout << "Failed to fetch row from RecordBank" << endl;
                 return;
             }
 
@@ -710,7 +748,7 @@ class Table {
                 
                 Row row;
                 if(!this->fetch(RecordBank, row, fetched_offset)) {
-                    cout << "Failed ot fetch row from RecordBank" << endl;
+                    cout << "Failed to fetch row from RecordBank" << endl;
                     return;
                 }
                 results.push_back(row);
@@ -720,29 +758,82 @@ class Table {
 
         }
 
-        void fetchAllRows() {  // Renamed/updated to read all
-            fstream file(this->RecordBank_path, ios::binary | ios::in);
-            if (!file) {
-                cout << "Failed to Open file" << endl;
+        void deleteRow_byID(const int id) {
+
+            fstream index(fs::path(this->index_path) / "id.idx", ios::binary | ios::in);
+            if(!index) {
+                cerr << "Failed to find ID index file." << endl;
+                return;
+            }
+
+            int fetched_offset = 0;
+
+            if(!fetch_ID_offset(index, id, fetched_offset)) {
+                cout << "Failed to get row location from ID index" << endl;
+                return;
+            }
+            index.close();
+            
+            fstream RecordBank(this->RecordBank_path, ios::binary | ios::in | ios::out);
+            if (!RecordBank) {
+                cout << "Failed to Find RecordBank file." << endl;
                 return;
             }
             
-            if(!this->validate_RecordBank_header(file)) {
+            if(!this->validate_RecordBank_header(RecordBank)) {
                 cout << "Header not validated." << endl;
                 return;
             }
 
+            cout << "Fected offset from delete: " << fetched_offset << endl;
 
-            data.clear();  // Reset internal data
-            while (file.peek() != EOF) {
-                Row row;
-                if (!this->fetch(file, row)) {
-                    if (file.eof()) break;  // Normal end
-                    cout << "Failed to fetch row." << endl;
+            if(!this->deleteRow(RecordBank, fetched_offset)) {
+                cout << "Failed to delete row from RecordBank" << endl;
+                return;
+            }
+            cout << "deleted sucessfully" << endl;
+
+        }
+
+        void deleteRow_byValue(string& column, variant<int32_t, string, double>& value) {
+
+            string file_name = column + ".idx";
+
+            fstream index(fs::path(this->index_path) / file_name, ios::binary | ios::in | ios::out);
+            if(!index) {
+                cerr << "Failed to find Value index file." << endl;
+                return;
+            }
+
+            vector<uint32_t> fetched_offsets;
+            
+            if(!fetch_Value_offset(index, value, fetched_offsets)) {
+                cerr << "Failed to fetch record bank offsets" << endl;
+                return;
+            }
+            index.close();
+
+            fstream RecordBank(this->RecordBank_path, ios::binary | ios::in | ios::out);
+            if (!RecordBank) {
+                cout << "Failed to Find RecordBank file." << endl;
+                return;
+            }
+            
+            if(!this->validate_RecordBank_header(RecordBank)) {
+                cout << "Header not validated." << endl;
+                return;
+            }
+
+            for (auto fetched_offset : fetched_offsets) {
+                
+                if(!this->deleteRow(RecordBank, fetched_offset)) {
+                    cout << "Failed to Delete row from RecordBank" << endl;
                     return;
                 }
-                data.push_back(row);
+                
             }
+            RecordBank.close();
+
         }
 };
 
@@ -754,17 +845,45 @@ int main() {
         {DataType::REAL, "percentage"}
     };
     
-    Table table("Dudes");
-    //Table table("Dudes");
+    Table table("Dudes", columns);
 
+    Row add;
+    add.values.push_back("Pippa");
+    add.values.push_back(100);
+    add.values.push_back(0.5);
+    Row add2;
+    add2.values.push_back("Dude");
+    add2.values.push_back(50);
+    add2.values.push_back(1.5);
+    Row add3;
+    add3.values.push_back("Yohan the Butcher");
+    add3.values.push_back(25);
+    add3.values.push_back(0.7);
+    Row add4;
+    add4.values.push_back("Kirche");
+    add4.values.push_back(99);
+    add4.values.push_back(6.5);
+    
+    vector<Row> rows2 = { {add, add2, add3, add4} };
+
+    for (auto i: rows2) {
+        table.appendRow(i);
+    }
+
+
+    string col = "student_name";
+    variant<int32_t, string, double> key = "Dude";
+
+    table.deleteRow_byValue(col, key);
 
     vector<Row> results;
 
-    variant<int32_t, string, double> key = 0.5;
-    string col = "percentage";
+    
+    
     
     Row row;
     table.fetchRow_byValue(col, key, results);
+    //results.push_back(row);
 
         
         int count = 0;
