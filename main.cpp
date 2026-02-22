@@ -1038,17 +1038,17 @@ int main() {
     }
 
 
-    string col = "grade";
-    variant<int32_t, string, double> key = "Dude";
+    string col = "student_name";
+    variant<int32_t, string, double> key = "Yohan the Butcher";
 
-    //vector<string> columns2 = {{"grade"}};
-    //vector<variant<int32_t, string, double>> values = {{1000}};
-    //table.updateRow_byID(3, columns2, values);
+    vector<string> columns2 = {{"grade"}};
+    vector<variant<int32_t, string, double>> values = {{1000}};
+    table.updateRow_byID(3, columns2, values);
 
     vector<Row> results;
 
     Row row;
-    table.fetchRow_byValue(col, key, results);
+    table.fetchRow_byID(3, row);
     results.push_back(row);
         
         int count = 0;

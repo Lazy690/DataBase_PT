@@ -516,7 +516,7 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
 
     //Tree search traversal
     while(true) {
-
+        
         int32_t key_len = 0;
         string key;
 
@@ -525,6 +525,8 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
         key.resize(key_len);
         file.read(key.data(), key_len);
         
+        cout << "Item to Search: " << item << endl; 
+        cout << "Extracted item: " << key << endl; 
         //match found:
         if(key == item) {
 
@@ -557,9 +559,9 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
         }
         //When its lesser
         //note that the sign is inverted because strings are like that >:(
-        else if(key < item) {
+        else if(key > item) {
             //jump 4 bytes to left pointer and save the pointers location
-            file.seekg(4, ios::cur);
+            file.seekg(8, ios::cur);
             int32_t left_pointer = 0;
             file.read(reinterpret_cast<char*>(&left_pointer), sizeof(left_pointer));
             if(left_pointer == -1) {
@@ -577,9 +579,9 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
         }
         //If item is greater then key
         //note that the sign is inverted because strings are like that >:(
-        else if(key > item) {
+        else if(key < item) {
             //jump 8 bytes to left pointer and save the pointers location
-            file.seekg(8, ios::cur);
+            file.seekg(12, ios::cur);
             int32_t right_pointer = 0;
             file.read(reinterpret_cast<char*>(&right_pointer), sizeof(right_pointer));
 
@@ -598,7 +600,7 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
         }
 
         cycle++;
-        if(cycle > 2000) {
+        if(cycle > 10) {
             cerr << "Endless BST loop detected." << endl;
             cerr << "Canceling STR fetch" << endl;
             return false;
