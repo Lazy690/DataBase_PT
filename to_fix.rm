@@ -4,3 +4,6 @@
 [ ] - Make sure all file opens have validation first.
 [ ] - Make sure to never open a file inside one of the private functions like save_id_record().
 [ ] - fix sigmentation fault if you add a full num with no decimal in a row.
+
+[ ] - make BST nodes into structs in indexer and make sure to intigrate to the rest of the code. and take
+out parts where it jumps bytes from current location.

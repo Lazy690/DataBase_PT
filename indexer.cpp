@@ -3,7 +3,16 @@
 using namespace std;
 
 
+
 Indexer::Indexer() {}
+
+struct Indexer::BST_Node {
+
+};
+
+struct Indexer::Overflow_Node {
+
+};
 
 bool Indexer::write_offset_pointers(fstream& file, const uint32_t& offset_db) {
     //Save DataBank offset

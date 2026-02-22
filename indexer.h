@@ -18,6 +18,9 @@ class Indexer {
         fs::path id_index_path;
         vector<fs::path> secondary_index_paths;
 
+        struct BST_Node;
+        struct Overflow_Node;
+
         bool write_offset_pointers(fstream& file, const uint32_t& offset_db);
         bool write_overflow_pointer(fstream& file, const uint32_t& offset_db);
 
