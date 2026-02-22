@@ -68,7 +68,7 @@ class Table {
         bool validate_RecordBank_header(fstream& file) {
             
             RecordBankHeader header;
-
+ 
             file.read(reinterpret_cast<char*>(&header), sizeof(RecordBankHeader));
             
             if(header.MAGIC != this->DBheader.MAGIC) {
@@ -251,7 +251,9 @@ class Table {
         //==================================================================
 
 
-        bool save_ID_record(const uint32_t& id, const uint32_t& offset) {
+        bool save_ID_record(const uint32_t& id,  
+                            const uint32_t& offset,
+                            const int32_t& overrite_id_offset = -1) {
 
             fstream file(fs::path(this->index_path) / "id.idx", ios::binary | ios::in | ios::out);
 
@@ -264,8 +266,12 @@ class Table {
                 cout << "Missing Id index file." << endl;
                 return false;
             }
-            file.seekp(0, ios::end);
-            //int first_pos = file.tellp();
+            if(int(overrite_id_offset) != -1) {
+                file.seekp(overrite_id_offset, ios::beg);
+            }
+            else {
+                file.seekp(0, ios::end);
+            }
             
             file.write(reinterpret_cast<const char*>(&id), sizeof(id));
             
@@ -325,7 +331,7 @@ class Table {
                 return false;
             }
 
-            //9 is the size of the header + one byte for the type
+            //12 is the size of the header 
             int header_size = 12;
             file.seekg(header_size, ios::beg);
             //8 is because each entry is always 8 bytes wide: [value][offset in bank]
@@ -376,7 +382,8 @@ class Table {
         //====== RecordBank operations                                  ======
         //==================================================================
 
-        bool append(std::fstream& file, const Row& row, uint32_t& hold_id, uint32_t& hold_offset) {
+        bool append(std::fstream& file, const Row& row, 
+                    uint32_t& hold_id, uint32_t& hold_offset) {
             
             // 2 is the index of id index offset in the header struct.
             // 4 is the size of each value in the header struct, each are 4 bytes wide.
@@ -386,7 +393,7 @@ class Table {
             file.read(reinterpret_cast<char*>(&index), sizeof(index));
             //reset read cursor:
             file.seekg(0, ios::beg);
-
+            
             index += 1;
             hold_id = index;
             //Move the write cursor to the end of the file to append:
@@ -520,8 +527,6 @@ class Table {
 
         bool deleteRow(fstream& file, int fetched_offset = -1) {
 
-            
-                
             file.seekp(fetched_offset, ios::beg);
             
 
@@ -534,6 +539,67 @@ class Table {
             cout << "Tumbstone value after writting it on delete: " << tumb << endl;
             return file.good();
         }
+
+        bool append_updated_row(std::fstream& file, const Row& row, int& hold_new_offset, 
+                                int old_index) {
+        
+            file.seekp(0, ios::end);
+            hold_new_offset = file.tellp();
+
+            //write Tumbstone bytes:
+            int32_t tumbstoned = 0;
+            file.write(reinterpret_cast<const char*>(&tumbstoned), sizeof(tumbstoned));
+
+            //write an empty space to later store the offset of the end of the row:
+            int32_t end_of_row_offset = -1;
+            int32_t end_of_row_offset_location = file.tellp();
+            file.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+
+            //Write row ID:
+            uint8_t id_type = 1;
+            file.write(reinterpret_cast<const char*>(&id_type), sizeof(id_type));
+            file.write(reinterpret_cast<const char*>(&old_index), sizeof(old_index));
+
+
+            for (const auto& value : row.values) {
+                std::visit([&file](const auto& payload) {
+                    using T = std::decay_t<decltype(payload)>;
+                        if constexpr (std::is_same_v<T, int32_t>) {
+
+                            uint8_t type = 1;
+                            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                            file.write(reinterpret_cast<const char*>(&payload), sizeof(payload));  // now 4 bytes
+                            
+
+                        } else if constexpr (std::is_same_v<T, std::string>) {
+
+                            uint8_t type = 2;
+                            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                            uint32_t len = static_cast<uint32_t>(payload.size());
+                            file.write(reinterpret_cast<const char*>(&len), sizeof(len));
+                            file.write(payload.data(), len);
+
+                        } else if constexpr (std::is_same_v<T, double>) {
+
+                            uint8_t type = 3;
+                            file.write(reinterpret_cast<const char*>(&type), sizeof(type));
+                            file.write(reinterpret_cast<const char*>(&payload), sizeof(payload));  // 4 bytes for double
+            
+                        }
+                }, value);
+            }
+
+            //store the offset of the end of the row in the empty space we saved earlier:
+            end_of_row_offset = file.tellp();
+            file.seekp(end_of_row_offset_location, ios::beg);
+            file.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
+        
+            file.seekp(0, ios::beg);
+
+            //deleteRow(file, old_offset);
+
+            return file.good();
+    }
 
     public:
         
@@ -672,14 +738,14 @@ class Table {
                 return;
             }
 
-            if(!save_value_index_record(row, hold_offset)) {
+            if(!this->save_value_index_record(row, hold_offset)) {
                 cerr << "Failed to Index Item" << endl;
                 return;
             }
             
         }
 
-        void fetchRow_byID(int id, Row& row) {  
+        void fetchRow_byID(int id, Row& row, bool returns_offset = false, int* returned_offset = 0) {  
            
             fstream index(fs::path(index_path) / "id.idx", ios::binary | ios::in);
             if(!index) {
@@ -695,6 +761,12 @@ class Table {
             }
             index.close();
             
+            if(returns_offset) {
+
+                *returned_offset = fetched_offset;
+
+            }
+
             fstream RecordBank(this->RecordBank_path, ios::binary | ios::in);
             if (!RecordBank) {
                 cout << "Failed to Find RecordBank file." << endl;
@@ -835,6 +907,88 @@ class Table {
             RecordBank.close();
 
         }
+
+        void print_row_test(vector<Row> results) {
+            int count = 0;
+            for (auto row : results) {
+            for (auto item: row.values) {
+                    
+                count ++;
+                    visit([](const auto& x) {
+                        using T = std::decay_t<decltype(x)>;
+            
+                        if constexpr (std::is_same_v<T, int32_t>) {
+                            //cout << "Type: int" << endl;
+                            cout << "|| " << x << " ||" << endl;
+                        }
+                        else if constexpr (std::is_same_v<T, std::string>) {
+                            //cout << "Type: str" << endl;
+                            cout << "|| " << x << " ||" << endl;
+                        }
+                        else if constexpr (std::is_same_v<T, double>) {
+                            //cout << "Type: str" << endl;
+                            cout << "|| " << x << " ||" << endl;
+                        }
+                    }, item);
+                }
+            }
+        }
+
+        void updateRow_byID(int id, vector<string>& columns, vector<variant<int32_t, string, double>>& values) {
+            
+            Row row_to_update;
+            int hold_old_offset = 0;
+            int* returned_offset_from_fetch = &hold_old_offset;
+            this->fetchRow_byID(id, row_to_update, true, returned_offset_from_fetch);
+
+            for (auto value : values) {
+                for (int i = 0; i < int(this->schema.size()); i++) {
+
+                    for (auto col_name : columns) {
+
+                        if(schema[i].name != col_name) continue;
+
+                        row_to_update.values[i + 1] = value;
+
+                    }
+
+                }
+            }
+            vector<Row> results;
+            results.push_back(row_to_update);
+            print_row_test(results);
+            int old_index = get<int>(row_to_update.values[0]);
+            int hold_new_offset = 0;
+
+            fstream RecordBank(this->RecordBank_path, ios::binary | ios::in | ios::out);
+
+            if(!append_updated_row(RecordBank, row_to_update, hold_new_offset, old_index)) {
+                cerr << "Failed to update the file in record bank" << endl;
+                return;
+            }
+
+            RecordBank.close();
+
+
+
+            //12 is the size of the header 
+            int header_size = 12;
+            //8 is because each entry is always 8 bytes wide: [value][offset in bank]
+            int id_location_offset = ((old_index - 1) * 8) + header_size;
+
+            if(!this->save_ID_record(old_index, hold_new_offset, id_location_offset)) {
+                cerr << "Could not update the index with the new offset." << endl;
+                return;
+            }
+
+            fstream RecordBank_delete(this->RecordBank_path, ios::binary | ios::in | ios::out);
+
+            if(!deleteRow(RecordBank_delete, hold_old_offset)) {
+                cout << "Failed to delete row after updating." << endl; 
+                return;
+            }
+
+        }
 };
 
 int main() {
@@ -842,7 +996,9 @@ int main() {
     vector<Column> columns = {
         {DataType::TEXTO, "student_name"},
         {DataType::INTEIRO, "grade"},
+        {DataType::TEXTO, "dead"},
         {DataType::REAL, "percentage"}
+        
     };
     
     Table table("Dudes", columns);
@@ -850,19 +1006,30 @@ int main() {
     Row add;
     add.values.push_back("Pippa");
     add.values.push_back(100);
-    add.values.push_back(0.5);
+    add.values.push_back("yes");
+    add.values.push_back(0.6);
+
+    
     Row add2;
     add2.values.push_back("Dude");
     add2.values.push_back(50);
+    add2.values.push_back("yes");
     add2.values.push_back(1.5);
+
+    
     Row add3;
     add3.values.push_back("Yohan the Butcher");
     add3.values.push_back(25);
+    add3.values.push_back("yes");
     add3.values.push_back(0.7);
+
+    
     Row add4;
     add4.values.push_back("Kirche");
     add4.values.push_back(99);
+    add4.values.push_back("yes");
     add4.values.push_back(6.5);
+    
     
     vector<Row> rows2 = { {add, add2, add3, add4} };
 
@@ -871,20 +1038,18 @@ int main() {
     }
 
 
-    string col = "student_name";
+    string col = "grade";
     variant<int32_t, string, double> key = "Dude";
 
-    table.deleteRow_byValue(col, key);
+    //vector<string> columns2 = {{"grade"}};
+    //vector<variant<int32_t, string, double>> values = {{1000}};
+    //table.updateRow_byID(3, columns2, values);
 
     vector<Row> results;
 
-    
-    
-    
     Row row;
     table.fetchRow_byValue(col, key, results);
-    //results.push_back(row);
-
+    results.push_back(row);
         
         int count = 0;
         for (auto row : results) {
@@ -902,14 +1067,9 @@ int main() {
                         //cout << "Type: str" << endl;
                         cout << "|| " << x << " ||" << endl;
                     }
-                    else if constexpr (std::is_same_v<T, double>) {
-                        //cout << "Type: str" << endl;
-                        cout << "|| " << x << " ||" << endl;
-                    }
                 }, item);
             }
         }
-   
 
     return 0;
 }

@@ -1,0 +1,6 @@
+[ ] - investigate the case of 99.99 double.
+[ ] - make the code in update functions more elegant and less messy.
+[ ] - Make sure to take out redundancy in header validation.
+[ ] - Make sure all file opens have validation first.
+[ ] - Make sure to never open a file inside one of the private functions like save_id_record().
+[ ] - fix sigmentation fault if you add a full num with no decimal in a row.

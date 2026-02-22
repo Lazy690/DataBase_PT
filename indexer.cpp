@@ -92,11 +92,11 @@ bool Indexer::insert_into_BST_str(fstream& file, const string& item, const int32
     file.seekp(0, ios::beg);
     file.seekg(12, ios::beg);
 
-    //int count = 1;
+    int cycle = 0;
+    
     //Tree traversal
     while(true) {
-        //cout << count << endl;
-        //count++;
+        
 
         uint32_t appended_offset = 0;
         uint32_t key_len = 0;
@@ -209,6 +209,13 @@ bool Indexer::insert_into_BST_str(fstream& file, const string& item, const int32
 
             }
             
+        }
+        
+        cycle++;
+        if(cycle > 2000) {
+            cerr << "Endless BST loop detected." << endl;
+            cerr << "Canseling run" << endl;
+            return false;
         }
 
     }
@@ -505,6 +512,8 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
         return file.good();
     }
 
+    int cycle = 0;
+
     //Tree search traversal
     while(true) {
 
@@ -586,6 +595,13 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
                 continue;
 
             }
+        }
+
+        cycle++;
+        if(cycle > 2000) {
+            cerr << "Endless BST loop detected." << endl;
+            cerr << "Canceling STR fetch" << endl;
+            return false;
         }
 
     }
