@@ -7,3 +7,5 @@
 
 [ ] - make BST nodes into structs in indexer and make sure to intigrate to the rest of the code. and take
 out parts where it jumps bytes from current location.
+[ ] - in fetch function, make sure to specify that the row will return as null or empty, otherwise it can cause
+sigmentation faults.

@@ -790,7 +790,7 @@ class Table {
         }
 
         void fetchRow_byValue(string& column, variant<int32_t, string, double>& value, vector<Row>& results,
-                              bool returns_offset = false, int* returned_offset = 0) {
+                              bool returns_offset = false, vector<uint32_t>* returned_offsets = {}) {
             
             string file_name = column + ".idx";
 
@@ -809,8 +809,8 @@ class Table {
             index.close();
 
             if(returns_offset) {
-
-                *returned_offset = fetched_offset;
+    
+                *returned_offsets = fetched_offsets;
 
             }
 
@@ -832,10 +832,13 @@ class Table {
                     cout << "Failed to fetch row from RecordBank" << endl;
                     return;
                 }
+                if (row.values.empty()) {
+                    continue;
+                }
                 results.push_back(row);
             }
             RecordBank.close();
-
+            cout << "Results vector before cheking: " << results.size() << endl;
 
         }
 
@@ -1020,6 +1023,88 @@ class Table {
             }
 
         }
+
+        void updateRow_byValue(string column_to_search, variant<int32_t, string, double>& value_to_search, 
+                                map<string, variant<int32_t, string, double>>& values_map) {
+            
+            vector<Row> rows_to_update;
+            vector<uint32_t> hold_old_offsets = {};
+            vector<uint32_t>* returned_offset_from_fetchPTR = &hold_old_offsets;
+            this->fetchRow_byValue(column_to_search, value_to_search, rows_to_update,
+                                true, returned_offset_from_fetchPTR);
+            
+            for (int i = 0; i < int(rows_to_update.size()); i++) {
+
+                int old_index = get<int>(rows_to_update[i].values[0]);
+                
+                //Take out the index in the loaded in row so that it doesnt repeat it in the record bank
+                rows_to_update[i].values.erase(rows_to_update[i].values.begin());
+
+                vector<string> columns_keys;
+                vector<string> schema_column_names;
+
+                for (auto key = values_map.begin(); key != values_map.end(); key++) {
+                    columns_keys.push_back(key->first);
+                }
+                for (auto col : this->schema) {
+                    schema_column_names.push_back(col.name);
+                }
+
+                for ( auto column_name : columns_keys) {
+
+                    auto it = find(schema_column_names.begin(),
+                                schema_column_names.end(),
+                                column_name);
+
+                    if (it == schema_column_names.end()) {
+                        cout << "Integrety error: " << column_name << " is not a valid column" << endl;
+                        return;
+                    }
+                    int index_position = it - schema_column_names.begin();
+                    
+                    rows_to_update[i].values[index_position] = values_map[column_name];
+                }
+
+                vector<Row> results;
+                results.push_back(rows_to_update[i]);
+                print_row_test(results);
+                
+                fstream RecordBank(this->RecordBank_path, ios::binary | ios::in | ios::out);
+
+                int hold_new_offset = 0;
+                uint32_t hold_new_offset_Uint = 0;
+                if(!append_updated_row(RecordBank, rows_to_update[i], hold_new_offset, old_index)) {
+                    cerr << "Failed to update the file in record bank" << endl;
+                    return;
+                }
+                
+                hold_new_offset_Uint = hold_new_offset;
+
+                RecordBank.close();
+
+                //12 is the size of the header 
+                int header_size = 12;
+                //8 is because each entry is always 8 bytes wide: [value][offset in bank]
+                int id_location_offset = ((old_index - 1) * 8) + header_size;
+
+                if(!this->save_ID_record(old_index, hold_new_offset, id_location_offset)) {
+                    cerr << "Could not update the index with the new offset." << endl;
+                    return;
+                }
+
+                if(!this->save_value_index_record(rows_to_update[i], hold_new_offset_Uint)) {
+                    cerr << "Failed to Index Item" << endl;
+                    return;
+                }
+
+                fstream RecordBank_delete(this->RecordBank_path, ios::binary | ios::in | ios::out);
+
+                if(!deleteRow(RecordBank_delete, hold_old_offsets[i])) {
+                    cout << "Failed to delete row after updating." << endl; 
+                    return;
+                }
+            }
+        }
         
 };
 
@@ -1071,11 +1156,12 @@ int main() {
 
 
     string col = "student_name";
-    variant<int32_t, string, double> key = "Devious little kitten";
+    variant<int32_t, string, double> key_to_search = "Yohan the Butcher";
+    variant<int32_t, string, double> key = "Yohan the Butcher";
 
     vector<string> columns2 = {{"grade"}, {"student_name"}};
     map<string, variant<int32_t, string, double>> values = {{"grade", 1000}, {"student_name", "Devious little kitten"}, {"percentage", 30.69}};
-    table.updateRow_byID(4, values);
+    table.updateRow_byValue(col, key_to_search , values);
 
     vector<Row> results;
 

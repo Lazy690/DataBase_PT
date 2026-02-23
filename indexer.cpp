@@ -609,7 +609,7 @@ bool Indexer::fetch_from_BST_str(fstream& file, const string& item, vector<uint3
         }
 
         cycle++;
-        if(cycle > 10) {
+        if(cycle > 2000) {
             cerr << "Endless BST loop detected." << endl;
             cerr << "Canceling STR fetch" << endl;
             return false;
