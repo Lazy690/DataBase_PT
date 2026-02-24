@@ -298,29 +298,35 @@ class Table {
                 
                 switch(schema[i].type) {
                     
-                    case DataType::INTEIRO:
+                    case DataType::INTEIRO: {
                         cout << "Inserting into index: " << get<int32_t>(row.values[i]) << endl;
-                        if(!this->indexer.insert_into_BST_int(index_out, get<int32_t>(row.values[i]), hold_offset)) {
+                        int32_t item_int = get<int32_t>(row.values[i]);
+                        if(!this->indexer.insert_into_BST(index_out, item_int, hold_offset)) {
                             cerr << "Failed to save Index record." << endl;
                             return false;
                         }
                         break;
+                    }
 
-                    case DataType::TEXTO:
+                    case DataType::TEXTO: {
                         cout << "Inserting into index: " << get<string>(row.values[i]) << endl;
-                        if(!this->indexer.insert_into_BST_str(index_out, get<string>(row.values[i]), hold_offset)) {
+                        string item_string = get<string>(row.values[i]);
+                        if(!this->indexer.insert_into_BST(index_out, item_string, hold_offset)) {
                             cerr << "Failed to save Index record." << endl;
                             return false;
                         }
                         break;
+                    }
 
-                    case DataType::REAL:
+                    case DataType::REAL: {
                         cout << "Inserting into index: " << get<double>(row.values[i]) << endl;
-                        if(!this->indexer.insert_into_BST_double(index_out, get<double>(row.values[i]), hold_offset)) {
+                        double item_double = get<double>(row.values[i]);
+                        if(!this->indexer.insert_into_BST(index_out, item_double, hold_offset)) {
                             cerr << "Failed to save Index record." << endl;
                             return false;
                         }
                         break;
+                    }
                 }
             }
             return true;
@@ -367,11 +373,11 @@ class Table {
             std::visit([&file, &fetched_offsets, this](const auto& key) {
                 using T = std::decay_t<decltype(key)>;
                     if constexpr (std::is_same_v<T, int32_t>) {
-                        this->indexer.fetch_from_BST_int(file, key, fetched_offsets);
+                        this->indexer.fetch_from_BST(file, key, fetched_offsets);
                     } else if constexpr (std::is_same_v<T, std::string>) {
-                        this->indexer.fetch_from_BST_str(file, key, fetched_offsets);
+                        this->indexer.fetch_from_BST(file, key, fetched_offsets);
                     } else if constexpr (std::is_same_v<T, double>) {
-                        this->indexer.fetch_from_BST_double(file, key, fetched_offsets);
+                        this->indexer.fetch_from_BST(file, key, fetched_offsets);
                     }
             }, value); 
 
@@ -1157,7 +1163,7 @@ int main() {
 
     string col = "student_name";
     variant<int32_t, string, double> key_to_search = "Yohan the Butcher";
-    variant<int32_t, string, double> key = "Yohan the Butcher";
+    variant<int32_t, string, double> key = "Devious little kitten";
 
     vector<string> columns2 = {{"grade"}, {"student_name"}};
     map<string, variant<int32_t, string, double>> values = {{"grade", 1000}, {"student_name", "Devious little kitten"}, {"percentage", 30.69}};
