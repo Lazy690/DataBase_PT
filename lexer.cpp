@@ -66,47 +66,44 @@ struct Token {
     string value;
 };
 
-struct comp_string {
+struct Where_clause{
     
     string right_item;
     string comparator;
     string left_item;
 
-}
-
-struct Where_clause {
-
-    string right_item;
-    string comparator;
-    string left_item;
-
-    //Where_clause(string r, Token c, string l) : right_item(r), left_item(l) {
-  
-      //  if(!isInVector(c.value, Comparators)) throw runtime_error("Initialized 'WHERE' clause with invalid or absent comparison token.");
-
-        //comparator(c);
-
-    //}
-
 };
 
-  Where_clause collect_clauses(int& cursor, vector<Token>& tokens) {    
-      Where_clause clause;
+struct Command {
+    //function pointer named 'action'.
+    void (*action)(string, string);
+    string table;
+    string attribute;
+    string value;
+    vector<Where_clause> clauses;
+};
 
-      if(isInVector(tokens[cursor].value, KeyWords) && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
+Where_clause collect_clauses(int& cursor, vector<Token>& tokens) {
+
+      Where_clause clause;
+      if(isInVector(tokens[cursor].value, KeyWords)) throw runtime_error("Invalid token Type");
       clause.left_item = tokens[cursor].value; 
       cursor++;
       if(tokens[cursor].type != TokenType::OPERATOR && !isInVector(tokens[cursor].value, Comparators))
               throw runtime_error("Invalid Comparison Operator in 'WHERE' clause");
       clause.comparator = tokens[cursor].value;
       cursor++;
+     
+
       if(tokens[cursor].type != TokenType::STRING && tokens[cursor].type != TokenType::NUMBER 
               && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
       clause.right_item = tokens[cursor].value;
-      return clause;
-  }
 
-  string collect_parenthesis(int& cursor, vector<Token>& tokens) {
+      return clause;
+}
+
+
+string collect_parenthesis(int& cursor, vector<Token>& tokens) {
       cursor++;
       if(tokens[cursor].value != "(") throw runtime_error("Expected token '(' for value instantiation.");
       int endof_parenthesis = 0;
@@ -139,53 +136,17 @@ struct Where_clause {
       return value;
   }
 
-  comp_string collect_comp_string(int& cursor, vector<Token>& tokens) {
+string collect_set(int& cursor, vector<Token> tokens)  {
+      
+      string set;    
+      while(tokens[cursor].value != "WHERE") {
+          set += tokens[cursor].value;
+          set += " ";
+          cursor++;
+      } 
+      return set;
+}
 
-      comp_string comp;
-
-      if(isInVector(tokens[cursor].value, KeyWords) && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
-      comp.left_item = tokens[cursor].value; 
-      cursor++;
-      if(tokens[cursor].type != TokenType::OPERATOR && !isInVector(tokens[cursor].value, Comparators))
-              throw runtime_error("Invalid Comparison Operator in 'WHERE' clause");
-      comp.comparator = tokens[cursor].value;
-      cursor++;
-      if(tokens[cursor].type != TokenType::STRING && tokens[cursor].type != TokenType::NUMBER 
-              && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
-      comp.right_item = tokens[cursor].value;
-
-      return comp;
-  }
-
-  string collect_set(int& cursor, vector<Token>& tokens) {
-
-    while(tokens[cursor].value != "WHERE") {
-        //temporary for testing!!
-        if(tokens[cursor].type != TokenType::STRING && tokens[cursor].type != TokenType::NUMBER 
-            && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
-        if(((cursor + 1) != endof_parenthesis) && tokens[cursor + 1].value != ",") throw runtime_error("Expected ',' token");
-        else if(tokens[cursor + 1].value == ",") {
-            value += tokens[cursor].value;
-            value += " ";
-            cursor += 2;
-            continue;
-        } 
-        value += tokens[cursor].value;
-        value += " ";
-        cursor += 1;
-
-    
-
-  }
-
-struct Command {
-    //function pointer named 'action'.
-    void (*action)(string, string);
-    string table;
-    string attribute;
-    string value;
-    vector<Where_clause> clauses;
-};
 
 vector<Token> tokenize(const string& input) {
     vector<Token> tokens;
@@ -292,8 +253,7 @@ Command parser(vector<Token> tokens) {
         throw runtime_error("This Action not a valid command.");
     }
     }
-
-    //check to see if command string has an end character (just in case)
+//check to see if command string has an end character (just in case)
     if(tokens[-1].type != TokenType::END) {
         //throw runtime_error("Missing 'END' token at the end of the command string");
     }
@@ -391,9 +351,9 @@ Command parser(vector<Token> tokens) {
 
           command.clauses.push_back(collect_clauses(cursor, tokens));
           break;
-    } 
+ 
       case Action::UPDATE:
-        
+        cout << "Token: " << tokens[cursor].value << endl;        
         if(isInVector(tokens[cursor].value, KeyWords))
             throw runtime_error("Expected a table name after token 'UPDATE'");
         
@@ -403,25 +363,30 @@ Command parser(vector<Token> tokens) {
 
         if(tokens[cursor].value != "SET")
             throw runtime_error("Expected 'SET' clause after table decleration.");
-          
-        values = collect_paranthesis(cursor, tokens);
         
-        command.attribute = values;
-        values.erase();
         {
-          bool where_exists = false;   
-          for(int i = cursor; i < tokens.size(); i++) {
-            if(token[i].value == "WHERE") where_exists = true;
-          }
-          if(!where_exists) throw runtime_error("Expected a 'WHERE' clause for 'UPDATE' commands.");
+        bool where_exists = false;   
+        for(int i = cursor; i < tokens.size(); i++) {
+           if(tokens[i].value == "WHERE") where_exists = true;
         }
+           if(!where_exists) throw runtime_error("Expected a 'WHERE' clause for 'UPDATE' commands.");
+        }
+        string set = collect_set(cursor, tokens);
+        command.value = set;
+        Where_clause clause;
+        if(tokens[cursor].value != "WHERE")
+            throw runtime_error("Expected 'WHERE' clause after table decleration.");
+        cursor++;
 
+        command.clauses.push_back(collect_clauses(cursor, tokens));
+
+    }
 
     return command;
 }
 
 int main() {
-    string input = "INSERT INTO dudes VALUES ('Kirche', 20, 3.5)"; 
+    string input = "UPDATE dudes SET name = 'kirche', age = 18, grade = 16.5 WHERE name = 'Kirsche'"; 
 
     vector<Token> tokens = tokenize(input);
 
