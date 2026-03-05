@@ -353,6 +353,4 @@ class Indexer {
             }
         }
 
-
-        
 };     

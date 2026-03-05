@@ -46,7 +46,7 @@ class Table {
     private:
         RecordBankHeader DBheader{0x44415441, 2};
         IndexHeader Iheader{0x44415441, 2};
-        MetaDataHeader MDheader{0x44415441, 1};
+        MetaDataHeader MDheader{0x44415441, 2};
 
         uint32_t hold_row_id = 0;
         Row hold_for_indexing;
@@ -242,7 +242,7 @@ class Table {
                 schema.push_back(column);
 
             }
-
+            cout << "hello there" << endl;
             cout << "Finished loading metadata." << endl;
             return file.good();
 
