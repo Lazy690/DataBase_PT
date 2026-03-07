@@ -56,32 +56,82 @@ enum class Action {
     UPDATE
 };
 
-Action returnAction(string a) {
-    map<string, Action> m = {{"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
-    return m[a];
-}
+enum class ConnType {
+
+    AND;
+    OR;
+    NOT;
+
+};
 
 struct Token {
     TokenType type;
     string value;
 };
+struct comparison {
+    Token attribute;
+    Token comparator;
+    Token value;
+};
+
+struct Connector {
+    ConnType type;
+    where_clause* next = nullptr;
+};
 
 struct Where_clause{
     
-    string right_item;
-    string comparator;
-    string left_item;
-
+    comparison expression;
+    Connector* connector = nullptr;
+    
 };
 
-struct Command {
-    //function pointer named 'action'.
-    void (*action)(string, string);
+struct INSERT_AST {
+
     string table;
-    string attribute;
-    string value;
-    vector<Where_clause> clauses;
+    vector<Token> attributes
+    vector<Token> values;
+
 };
+
+struct SELECT_AST {
+
+    string table;
+    vector<Token> attributes;
+    Where_clause clause;
+
+};
+
+struct DELETE_AST {
+
+    string table;
+    Where_clause clause;
+    
+};
+
+struct UPDATE_AST {
+
+    string table;
+    vector<comparison> set;
+    Where_clause clause;
+
+};
+
+struct COMMAND{
+    
+    Action ACTION;
+    INSERT_AST INSERT;
+    SELECT_AST SELECT;
+    DELETE_AST DELETE;
+    UPDATE_AST UPDATE;
+    
+};
+
+Action returnAction(string a) {
+    map<string, Action> m = {{"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
+    return m[a];
+}
+
 
 Where_clause collect_clauses(int& cursor, vector<Token>& tokens) {
 
@@ -146,244 +196,137 @@ string collect_set(int& cursor, vector<Token> tokens)  {
       } 
       return set;
 }
+class Parser {
 
+    private:
+        int cursor;
+        vector<Token> tokens;
 
-vector<Token> tokenize(const string& input) {
-    vector<Token> tokens;
-    string current;
+        string peek() { 
 
-    for (size_t i = 0; i < input.size(); i++) {
-        char c = input[i];
+        };
+        void consume() {
 
-        // 1️⃣ Skip whitespace
-        if (isspace(c)) {
-            continue;
-        }
+        };
+        void match() {
 
-        // 2️⃣ String literal
-        if (c == '\'') {
-            current = "";
-            i++; // move past opening quote
+        };
+        void expect {
 
-            while (i < input.size() && input[i] != '\'') {
-                current += input[i];
-                i++;
+        };
+        
+    public:
+    
+        Parser(vector<Token> t) : tokens(t) {}
+
+        vector<Token> tokenize(const string& input) {
+            vector<Token> tokens;
+            string current;
+
+            for (size_t i = 0; i < input.size(); i++) {
+                char c = input[i];
+
+                // 1 Skip whitespace
+                if (isspace(c)) {
+                    continue;
+                }
+
+                  // 2 String literal
+                  if (c == '\'') {
+                      current = "";
+                      i++; // move past opening quote
+
+                      while (i < input.size() && input[i] != '\'') {
+                          current += input[i];
+                          i++;
+                      }
+
+                      tokens.push_back({TokenType::STRING, current});
+                    continue;
+                }
+
+                // 3 Two-character operators
+                if ((c == '<' || c == '>' || c == '!' || c == '=') &&
+                    i + 1 < input.size() && input[i + 1] == '=') {
+                    
+                    string op;
+                    op += c;
+                    op += '=';
+
+                    tokens.push_back({TokenType::OPERATOR, op});
+                    i++; // skip second char
+                    continue;
+                }
+
+                // 4 Single-character operators
+                if (c == '<' || c == '>' || c == '=' || c == '+' || c == '-' || c == '*' || c == '(' || c == ')' || c == ',') {
+                    tokens.push_back({TokenType::OPERATOR, string(1, c)});
+                    continue;
+                }
+
+                // 5 Number
+                if (isdigit(c)) {
+                    current = "";
+
+                    while (i < input.size() && (isdigit(input[i]) || input[i] == '.')) {
+                        current += input[i];
+                        i++;
+                    }
+
+                    tokens.push_back({TokenType::NUMBER, current});
+                    i--; // adjust because loop increments
+                    continue;
+               }
+
+                // 6 Identifier
+                if (isalpha(c) || c == '_') {
+                    current = "";
+
+                    while (i < input.size() &&
+                          (isalnum(input[i]) || input[i] == '_')) {
+                        current += input[i];
+                        i++;
+                    }
+
+                    tokens.push_back({TokenType::IDENTIFIER, current});
+                    i--;
+                    continue;
+                }
+
+                // 7 Unknown character
+                throw runtime_error("Unknown character detected.");
             }
 
-            tokens.push_back({TokenType::STRING, current});
-            continue;
+            tokens.push_back({TokenType::END, ""});
+            return tokens;
         }
 
-        // 3️⃣ Two-character operators
-        if ((c == '<' || c == '>' || c == '!' || c == '=') &&
-            i + 1 < input.size() && input[i + 1] == '=') {
+        Command parser(vector<Token> tokens) {
+    
             
-            string op;
-            op += c;
-            op += '=';
+            
+            
+            switch(returnAction(tokens[0].value)) {
+                
+                case Action::INSERT:
 
-            tokens.push_back({TokenType::OPERATOR, op});
-            i++; // skip second char
-            continue;
-        }
+                
 
-        // 4️⃣ Single-character operators
-        if (c == '<' || c == '>' || c == '=' || c == '+' || c == '-' || c == '*' || c == '(' || c == ')' || c == ',') {
-            tokens.push_back({TokenType::OPERATOR, string(1, c)});
-            continue;
-        }
+                case Action::SELECT:
+                    
+                    
+                case Action::DELETE:
 
-        // 5️⃣ Number
-        if (isdigit(c)) {
-            current = "";
+                    
+        
+                case Action::UPDATE:
+                
 
-            while (i < input.size() && (isdigit(input[i]) || input[i] == '.')) {
-                current += input[i];
-                i++;
             }
 
-            tokens.push_back({TokenType::NUMBER, current});
-            i--; // adjust because loop increments
-            continue;
+            return command;
         }
-
-        // 6️⃣ Identifier
-        if (isalpha(c) || c == '_') {
-            current = "";
-
-            while (i < input.size() &&
-                   (isalnum(input[i]) || input[i] == '_')) {
-                current += input[i];
-                i++;
-            }
-
-            tokens.push_back({TokenType::IDENTIFIER, current});
-            i--;
-            continue;
-        }
-
-        // 7️⃣ Unknown character
-        throw runtime_error("Unknown character detected.");
-    }
-
-    tokens.push_back({TokenType::END, ""});
-    return tokens;
-}
-
-bool isValidGrammar(vector<Token>& tokens) {
-
-    if(tokens[0].type != TokenType::IDENTIFIER) {
-        cerr << "Syntax error: " << tokens[0].value << " is Invalid.";  
-        return false; 
-    }
-    
-    return true;
-}
-
-Command parser(vector<Token> tokens) {
-    
-    Command command;
-
-    if(tokens[0].type != TokenType::IDENTIFIER) {
-        throw runtime_error("Missing Action keyword the the beggining of the command.");
-    }
-    {
-    auto it = action_map.find(tokens[0].value);
-    if(it == action_map.end()) {
-        throw runtime_error("This Action not a valid command.");
-    }
-    }
-//check to see if command string has an end character (just in case)
-    if(tokens[-1].type != TokenType::END) {
-        //throw runtime_error("Missing 'END' token at the end of the command string");
-    }
-    
-    command.action = action_map[tokens[0].value]; 
-    string values;
-    int cursor = 1;
-    
-    
-    switch(returnAction(tokens[0].value)) {
-      
-      case Action::INSERT:
-
-        if(tokens[cursor].value != "INTO") 
-            throw runtime_error("Missing token after token INSERT, Did you mean 'INTO'?");
-        
-        cursor++;
-
-        if(isInVector(tokens[cursor].value, KeyWords))
-            throw runtime_error("Expected a table name after token INTO");
-
-        command.table = tokens[cursor].value;
-        
-        cursor++;
-
-        if(tokens[cursor].value != "VALUES") {
-            throw runtime_error("Expected token after table name, Did you mean 'VALUES'?");
-        }
-
-
-        values = collect_parenthesis(cursor, tokens);
-        
-        command.value = values;
-        
-        break;
-    
-
-      case Action::SELECT:
-          
-          //Temporary: For testing the only option avalable will be *;
-          if(tokens[cursor].value != "*")
-              throw runtime_error("Expected token '*' after 'SELECT'");
-
-          command.value = tokens[cursor].value;
-          
-          cursor++;
-
-          if(tokens[cursor].value != "FROM") 
-              throw runtime_error("Missing token after token INSERT, Did you mean 'FROM'?");
-          
-          cursor++;
-
-          if(isInVector(tokens[cursor].value, KeyWords))
-              throw runtime_error("Expected a table name after token 'FROM'");
-          
-          command.table = tokens[cursor].value;
-
-          cursor++;
-          cout << "Token: " << tokens[cursor].value << endl;
-          if(tokens[cursor].type == TokenType::END)
-              break;
-
-          
-          cout << "Token: " << tokens[cursor].value << endl;
- 
-          if(tokens[cursor].value != "WHERE")
-              throw runtime_error("Expected 'WHERE' clause. If not intended then end the command at the Table name.");
-          
-          //Expand later for more sufisticated WHERE clauses when you add AND
-          //gather all WHERE clauses:
-          
-          cursor++;
-
-          //vector<Where_clause> clauses;
-          command.clauses.push_back(collect_clauses(cursor, tokens));
-          break;
-      case Action::DELETE:
-
-          if(tokens[cursor].value != "FROM") 
-              throw runtime_error("Missing token after token 'DELETE', Did you mean 'FROM'?");
-          
-          cursor++;
-
-          if(isInVector(tokens[cursor].value, KeyWords))
-              throw runtime_error("Expected a table name after token 'FROM'");
-          
-          command.table = tokens[cursor].value;
-
-          cursor++;
-
-          if(tokens[cursor].value != "WHERE")
-              throw runtime_error("Expected 'WHERE' clause after table decleration.");
-          
-          cursor++;
-
-          command.clauses.push_back(collect_clauses(cursor, tokens));
-          break;
- 
-      case Action::UPDATE:
-        cout << "Token: " << tokens[cursor].value << endl;        
-        if(isInVector(tokens[cursor].value, KeyWords))
-            throw runtime_error("Expected a table name after token 'UPDATE'");
-        
-        command.table = tokens[cursor].value;
-        
-        cursor++;
-
-        if(tokens[cursor].value != "SET")
-            throw runtime_error("Expected 'SET' clause after table decleration.");
-        
-        {
-        bool where_exists = false;   
-        for(int i = cursor; i < tokens.size(); i++) {
-           if(tokens[i].value == "WHERE") where_exists = true;
-        }
-           if(!where_exists) throw runtime_error("Expected a 'WHERE' clause for 'UPDATE' commands.");
-        }
-        string set = collect_set(cursor, tokens);
-        command.value = set;
-        Where_clause clause;
-        if(tokens[cursor].value != "WHERE")
-            throw runtime_error("Expected 'WHERE' clause after table decleration.");
-        cursor++;
-
-        command.clauses.push_back(collect_clauses(cursor, tokens));
-
-    }
-
-    return command;
-}
+};
 
 int main() {
     string input = "UPDATE dudes SET name = 'kirche', age = 18, grade = 16.5 WHERE name = 'Kirsche'"; 
