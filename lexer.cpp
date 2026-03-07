@@ -203,16 +203,26 @@ class Parser {
         vector<Token> tokens;
 
         string peek() { 
-
+            return tokens[cursor].value;
         };
-        void consume() {
-
+        string consume() {
+            cursor++;
+            return tokens[cursor - 1];
         };
-        void match() {
-
+        bool match(string& check) {
+            if (tokens[cursor].value == check) {
+                cursor++;
+                return true;
+            }
+            
+            return false;
         };
-        void expect {
+        string expect(string& check) {
+            if (tokens[cursor].value != check) {
+                throw runtime_error("Invalid syntax");
+            }
 
+            return consume();
         };
         
     public:
