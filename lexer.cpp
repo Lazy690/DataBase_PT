@@ -3,12 +3,14 @@
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <variant>
 using namespace std;
 
 void insert(string table, string value) {cout << "Inserting " << value << " Into " << table << endl;}
 void select(string table, string value) {cout << "Selecting: " << value << " From " << table << endl;}
 void delete_(string table, string value) {cout << "Deleting From table: " << table << endl;}
 void update(string table,string value) {cout << "Updating: " << value << " From " << table << endl;}
+
 
 map<string, void(*)(string, string)> action_map = {{"INSERT", &insert}, {"SELECT", &select}, {"DELETE", &delete_}, {"UPDATE", &update}};
 
@@ -22,7 +24,8 @@ vector<string> KeyWords {
       "FROM",
       "INTO",
       "WHERE",
-      "SET"
+      "SET",
+      "*"
 
 };
 vector<string> Comparators {
@@ -58,9 +61,9 @@ enum class Action {
 
 enum class ConnType {
 
-    AND;
-    OR;
-    NOT;
+    AND,
+    OR,
+    NOT
 
 };
 
@@ -68,28 +71,31 @@ struct Token {
     TokenType type;
     string value;
 };
+
 struct comparison {
     Token attribute;
     Token comparator;
     Token value;
 };
 
+struct Where_clause;
+
 struct Connector {
     ConnType type;
-    where_clause* next = nullptr;
+    Where_clause* next;
 };
 
-struct Where_clause{
+struct Where_clause {
     
     comparison expression;
-    Connector* connector = nullptr;
+    Connector* connector;
     
 };
 
 struct INSERT_AST {
 
-    string table;
-    vector<Token> attributes
+    Token table;
+    vector<Token> attributes;
     vector<Token> values;
 
 };
@@ -120,71 +126,14 @@ struct UPDATE_AST {
 struct COMMAND{
     
     Action ACTION;
-    INSERT_AST INSERT;
-    SELECT_AST SELECT;
-    DELETE_AST DELETE;
-    UPDATE_AST UPDATE;
-    
+    variant<INSERT_AST, SELECT_AST, DELETE_AST, UPDATE_AST> AST;
+
 };
 
 Action returnAction(string a) {
     map<string, Action> m = {{"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
     return m[a];
 }
-
-
-Where_clause collect_clauses(int& cursor, vector<Token>& tokens) {
-
-      Where_clause clause;
-      if(isInVector(tokens[cursor].value, KeyWords)) throw runtime_error("Invalid token Type");
-      clause.left_item = tokens[cursor].value; 
-      cursor++;
-      if(tokens[cursor].type != TokenType::OPERATOR && !isInVector(tokens[cursor].value, Comparators))
-              throw runtime_error("Invalid Comparison Operator in 'WHERE' clause");
-      clause.comparator = tokens[cursor].value;
-      cursor++;
-     
-
-      if(tokens[cursor].type != TokenType::STRING && tokens[cursor].type != TokenType::NUMBER 
-              && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
-      clause.right_item = tokens[cursor].value;
-
-      return clause;
-}
-
-
-string collect_parenthesis(int& cursor, vector<Token>& tokens) {
-      cursor++;
-      if(tokens[cursor].value != "(") throw runtime_error("Expected token '(' for value instantiation.");
-      int endof_parenthesis = 0;
-      for (int i = cursor; i < tokens.size(); i++) {
-          if(tokens[i].value == ")") endof_parenthesis = i;
-      }
-      if(endof_parenthesis == 0) throw runtime_error("Token '(' was not closed.");
-      
-      string value;
-      
-      //exclude parenthesis
-      cursor++;
-      
-      while(cursor != endof_parenthesis) {
-          //temporary for testing!!
-          if(tokens[cursor].type != TokenType::STRING && tokens[cursor].type != TokenType::NUMBER 
-              && tokens[cursor].value != "," ) throw runtime_error("Invalid token Type");
-          if(((cursor + 1) != endof_parenthesis) && tokens[cursor + 1].value != ",") throw runtime_error("Expected ',' token");
-          else if(tokens[cursor + 1].value == ",") {
-              value += tokens[cursor].value;
-              value += " ";
-              cursor += 2;
-              continue;
-          } 
-          value += tokens[cursor].value;
-          value += " ";
-          cursor += 1;
-  
-      }
-      return value;
-  }
 
 string collect_set(int& cursor, vector<Token> tokens)  {
       
@@ -199,36 +148,83 @@ string collect_set(int& cursor, vector<Token> tokens)  {
 class Parser {
 
     private:
-        int cursor;
+        int cursor = 0;
         vector<Token> tokens;
-
+        
+        void skip() {
+            cursor++;
+            return;
+        }
         string peek() { 
             return tokens[cursor].value;
         };
-        string consume() {
+        Token consume() {
             cursor++;
             return tokens[cursor - 1];
         };
-        bool match(string& check) {
+        bool match(const string& check) {
             if (tokens[cursor].value == check) {
                 cursor++;
                 return true;
             }
-            
             return false;
         };
-        string expect(string& check) {
+        Token expect(const string& check) {
             if (tokens[cursor].value != check) {
                 throw runtime_error("Invalid syntax");
             }
-
             return consume();
         };
-        
-    public:
-    
-        Parser(vector<Token> t) : tokens(t) {}
 
+
+
+        bool isKeyWord(const string& word) {
+            return isInVector(word, KeyWords);
+        }
+        bool isKeyComparator(const string& word) {
+            return isInVector(word, Comparators);
+        }
+        int getEndOfParenthesis() {
+            for (int i = cursor; i < tokens.size(); i++) {
+                if(tokens[i].value == ")") return i;
+            }
+            return 0;
+        }
+
+
+
+        vector<Token> handle_parenthesis() {
+              
+              vector<Token> values;
+              int endof_parenthesis = getEndOfParenthesis();
+              if(endof_parenthesis == 0) throw runtime_error("Token '(' was not closed.");
+              bool expect_value = true; 
+              while(cursor != endof_parenthesis) {
+                  if(expect_value) {
+                      values.push_back(consume());
+                      expect_value = false;
+                  }
+                  else {
+                      if(peek() != ",") throw runtime_error("Expected ',' between values");
+                    skip();
+                      expect_value = true;
+                  }
+              }
+              skip();
+              return values;
+        }
+
+        comparison return_comparison() {
+            comparison comp;
+            if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'INTO'");
+            comp.attribute = consume();
+
+        }
+
+        Where_clause handle_where_clauses() {
+            
+        }
+          
         vector<Token> tokenize(const string& input) {
             vector<Token> tokens;
             string current;
@@ -306,54 +302,119 @@ class Parser {
                 // 7 Unknown character
                 throw runtime_error("Unknown character detected.");
             }
+           
 
+            for (auto& t : tokens) {
+                cout << static_cast<int>(t.type) << " : " << t.value << endl;
+            }
+            
             tokens.push_back({TokenType::END, ""});
             return tokens;
-        }
-
-        Command parser(vector<Token> tokens) {
+        }    
+    public:
     
-            
-            
-            
-            switch(returnAction(tokens[0].value)) {
-                
-                case Action::INSERT:
+        Parser(string input) {
 
-                
+            tokens = tokenize(input);
 
-                case Action::SELECT:
+        }
+    
+        COMMAND parse() {
+    
+            COMMAND command;
+            cout << peek() << endl;
+            command.ACTION = returnAction(peek());
+            skip();
+            
+            switch(command.ACTION) {
+                
+                case Action::INSERT: 
+                    { 
+
+                    INSERT_AST insert;
+                    expect("INTO");
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'INTO'");
+                    insert.table = consume();
+
+                    expect("(");
+                    insert.attributes = handle_parenthesis();
+                                cout << peek() << endl;
+
+                    expect("VALUES");
+                    expect("(");
+                    insert.values = handle_parenthesis();
+                    command.AST = insert;
+                    }
+                    break;
+                case Action::SELECT: {
+
+                    SELECT_AST select;
+
+                    if ( peek() == "*" ) {
+                        select.attributes.push_back(comsume());
+                    }
+                    else {
+                        expect("(");
+                        select.attributes = handle_parenthesis(); 
+                    }
+
+                    expect("FROM");
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
+                    insert.table = consume();
                     
+                    if ( match("WHERE") ) {
+                        
+                    }                    
+
+                    }
+                    break;
                     
                 case Action::DELETE:
-
+                    break;
                     
         
                 case Action::UPDATE:
-                
+                    break;
 
             }
 
             return command;
         }
+        void execute(COMMAND& comm) {
+            cout << "Attributes: " << endl;
+            if (holds_alternative<INSERT_AST>(comm.AST)) {
+                for(auto att : get<INSERT_AST>(comm.AST).attributes) {
+                    cout << att.value << endl;
+                }
+                cout << "Values: " << endl;
+                for (auto val : get<INSERT_AST>(comm.AST).values) {
+                    cout << val.value << endl; 
+                }
+            }
+        }
+        void execute_in(INSERT_AST& conn) {
+            cout << "Attributes: " << endl;
+            for(auto att : conn.attributes) {
+                cout << att.value << endl;
+            }
+            cout << "Values: " << endl;
+            for (auto val : conn.values) {
+                cout << val.value << endl; 
+            }
+      }
+
+
 };
 
 int main() {
-    string input = "UPDATE dudes SET name = 'kirche', age = 18, grade = 16.5 WHERE name = 'Kirsche'"; 
-
-    vector<Token> tokens = tokenize(input);
-
-    for (auto& t : tokens) {
-        cout << static_cast<int>(t.type) << " : " << t.value << endl;
-    }
+    string input = "INSERT INTO dudes (name, age, grade) VALUES ('Kirche', 28, 12.5)"; 
     
     try {
-        Command command;
-
-        command = parser(tokens);
-
-        command.action(command.table, command.value);
-        cout << "WHERE clause: " << command.clauses[0].left_item << " " << command.clauses[0].comparator << " " << command.clauses[0].right_item << endl;
+        COMMAND command;
+        Parser parser(input);
+        command = parser.parse();
+        parser.execute_in(get<INSERT_AST>(command.AST));
     }
     catch (const runtime_error& e) {
         cerr << "Error: " << e.what() << endl;
