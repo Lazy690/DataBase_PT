@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <map>
 #include <variant>
+#include <memory>
 using namespace std;
 
 void insert(string table, string value) {cout << "Inserting " << value << " Into " << table << endl;}
@@ -82,13 +83,13 @@ struct Where_clause;
 
 struct Connector {
     ConnType type;
-    Where_clause* next;
+    unique_ptr<Where_clause> next;
 };
 
 struct Where_clause {
     
-    comparison expression;
-    Connector* connector;
+    comparison comparison;
+    unique_ptr<Connector> connector;
     
 };
 
@@ -104,7 +105,7 @@ struct SELECT_AST {
 
     string table;
     vector<Token> attributes;
-    Where_clause clause;
+    unique_ptr<Where_clause> clause;
 
 };
 
@@ -222,9 +223,60 @@ class Parser {
         }
 
         Where_clause handle_where_clauses() {
-            
+
+        unique_ptr<Where_clause> handle_where_clauses() { 
+            bool is_connector = false; 
+            unique_ptr<Where_clause> clause_head = nullptr; 
+            unique_ptr<Where_clause> clause_tail = nullptr; 
+
+            unique_ptr<Where_clause> connector_tail = nullptr; 
+
+            while ( cursor != tokens.size() ) { 
+                if(!is_connector) { 
+                    if(clause_head == nullptr) { 
+                        if ( match("NOT") ) { 
+                            clause_head->is_negated = true; 
+                        } 
+
+                        clause_head->comparison = return_comparison(); 
+                        clause_tail = clause_head; 
+                    } else if(clause_head != nullptr) { 
+                        
+                        auto temp_clause = make_unique<Where_clause>(); 
+
+                        if ( match("NOT") ) { 
+                            temp_clause->is_negated = true; 
+                        } 
+
+                        temp_clause->comparison = return_comparison(); 
+                        connection_hold->next = temp_clause; 
+                        clause_tail = temp_clause; 
+                    } 
+
+                    if( cursor == tokens.size() ) { 
+                        break; 
+                    } 
+                    else if( (peek() == "OR") || (peek() == "AND") ) { 
+                        is_connector = true; 
+                        continue; 
+                    } else { 
+                        throw runtime_error("Expected tokens 'OR' or 'AND' at 'WHERE' clause"); 
+                    } 
+              
+                if(is_connector) { 
+                    connector_hold = make_unique<Connector>(); 
+                    
+                    if( match("AND") ) { 
+                        connector_hold->type = ConnType::AND; 
+                    } else if( match("OR") ) { 
+                        connector_hold->type = ConnType::OR; 
+                    } 
+
+                    clause_tail.connector = connector_hold; 
+                    is_connector = false; 
+                } 
+            } 
         }
-          
         vector<Token> tokenize(const string& input) {
             vector<Token> tokens;
             string current;
