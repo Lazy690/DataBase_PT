@@ -286,8 +286,28 @@ class Parser {
             }
             return 0;
         }
+        int getEndOfSet() {
+            for (int i = cursor; i < tokens.size(); i++) {
+                if(tokens[i].value == "WHERE") return i;
+            }
+            return 0;
+        }
 
 
+
+
+        Comparison return_comparison() {
+            Comparison comp;
+
+            if(isKeyWord(peek())) throw runtime_error("Expected attribute in 'WHERE' clause");
+            comp.attribute = consume();
+            if(!isKeyComparator(peek())) throw runtime_error("Expected comparator token after attribute declaration in 'WHERE' clause");
+            comp.comparator = consume();
+            if(isKeyWord(peek())) throw runtime_error("Expected value after comparator token in 'WHERE' clause");
+            comp.value = consume();
+
+            return comp;
+        }
 
         vector<Token> handle_parenthesis() {
               
@@ -310,18 +330,33 @@ class Parser {
               return values;
         }
 
-        Comparison return_comparison() {
-            Comparison comp;
+        vector<Comparison> handle_set() {
 
-            if(isKeyWord(peek())) throw runtime_error("Expected attribute in 'WHERE' clause");
-            comp.attribute = consume();
-            if(!isKeyComparator(peek())) throw runtime_error("Expected comparator token after attribute declaration in 'WHERE' clause");
-            comp.comparator = consume();
-            if(isKeyWord(peek())) throw runtime_error("Expected value after comparator token in 'WHERE' clause");
-            comp.value = consume();
+            vector<Comparison> comps;
+            int endof_set = getEndOfSet();
+            if(endof_set == 0) throw runtime_error("Expected 'WHERE' clasuse after 'SET'");
+            bool expect_value = true; 
+            while(cursor != endof_set) {
+                
+                Comparison comp;
+                if(expect_value) {
+                    comp = return_comparison();
+                    if(comp.comparator.value != "=") throw runtime_error("Expected '=' as comparator in 'SET'");
+                    comps.push_back(comp);
+                    expect_value = false;
+                }
+                else {
+                    if(peek() != ",") throw runtime_error("Expected ',' between values");
+                    skip();
+                    expect_value = true;
+                }
+            }
+            skip();
+            return comps;
 
-            return comp;
+
         }
+
 
         unique_ptr<Where_clause> handle_where_clauses() {
             
@@ -518,11 +553,23 @@ class Parser {
 
                     command.AST = move(delete_);
 
-
                     break;
                     }
         
                 case Action::UPDATE:
+                    UPDATE_AST update;
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'UPDATE'");
+                    update.table = consume();
+
+                    expect("SET");
+
+                    update.set = handle_set();
+
+                    update.where_clauses = handle_where_clauses();
+                    
+                    command.AST = move(update);
+
                     break;
 
             }
@@ -567,18 +614,28 @@ class Parser {
             cout << "WHERE clauses: " << endl;
             conn.where_clauses->print_clause();         
         }
-      
-
+        void execute_up(UPDATE_AST& conn) {
+            cout << "Table: " << conn.table.value << endl;
+            cout << "SET: " << endl;
+            for(auto comp : conn.set) {
+                cout << comp.attribute.value << " "
+                  << comp.comparator.value << " "
+                  << comp.value.value << endl;
+            }
+            if(conn.where_clauses == nullptr) return;
+            cout << "WHERE clauses: " << endl;
+            conn.where_clauses->print_clause();         
+        }
 };
 
 int main() {
-    string input = "DELETE FROM dudes "; 
+    string input = "UPDATE dudes SET name = 'Verstalt', age = 29 WHERE name = 'Kirsche' AND NOT age = 18"; 
     
     try {
         COMMAND command;
         Parser parser(input);
         command = parser.parse();
-        parser.execute_de(get<DELETE_AST>(command.AST));
+        parser.execute_up(get<UPDATE_AST>(command.AST));
     }
     catch (const runtime_error& e) {
         cerr << "Error: " << e.what() << endl;
