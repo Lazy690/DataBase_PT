@@ -206,7 +206,7 @@ struct SELECT_AST {
 struct DELETE_AST {
 
     Token table;
-    Where_clause clause;
+    unique_ptr<Where_clause> where_clauses;
     
 };
 
@@ -214,7 +214,7 @@ struct UPDATE_AST {
 
     Token table;
     vector<Comparison> set;
-    Where_clause clause;
+    unique_ptr<Where_clause> where_clauses;
 
 };
 
@@ -503,8 +503,24 @@ class Parser {
                     break;
                     
                 case Action::DELETE:
-                    break;
+                    {
+
+                    DELETE_AST delete_;
+
+                    expect("FROM");
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
+                    delete_.table = consume();
                     
+                    if ( match("WHERE") ) {
+                        delete_.where_clauses = handle_where_clauses();
+                    }                    
+
+                    command.AST = move(delete_);
+
+
+                    break;
+                    }
         
                 case Action::UPDATE:
                     break;
@@ -541,6 +557,13 @@ class Parser {
             for(auto att : conn.attributes) {
                 cout << att.value << endl;
             }
+            if(conn.where_clauses == nullptr) return;
+            cout << "WHERE clauses: " << endl;
+            conn.where_clauses->print_clause();         
+        }
+        void execute_de(DELETE_AST& conn) {
+            cout << "Table: " << conn.table.value << endl;
+            if(conn.where_clauses == nullptr) return;
             cout << "WHERE clauses: " << endl;
             conn.where_clauses->print_clause();         
         }
@@ -549,13 +572,13 @@ class Parser {
 };
 
 int main() {
-    string input = "SELECT (name, age) FROM dudes WHERE age = 19 AND NOT grade = 1.2"; 
+    string input = "DELETE FROM dudes "; 
     
     try {
         COMMAND command;
         Parser parser(input);
         command = parser.parse();
-        parser.execute_se(get<SELECT_AST>(command.AST));
+        parser.execute_de(get<DELETE_AST>(command.AST));
     }
     catch (const runtime_error& e) {
         cerr << "Error: " << e.what() << endl;
