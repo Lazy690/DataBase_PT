@@ -73,24 +73,118 @@ struct Token {
     string value;
 };
 
-struct comparison {
+struct Comparison {
     Token attribute;
     Token comparator;
     Token value;
 };
 
-struct Where_clause;
+struct Clause;
 
 struct Connector {
     ConnType type;
-    unique_ptr<Where_clause> next;
+    unique_ptr<Clause> next;
 };
 
-struct Where_clause {
+struct Clause {
     
-    comparison comparison;
+    bool is_negated = false;
+    Comparison comparison;
     unique_ptr<Connector> connector;
     
+};
+
+//Linked list that alternates between Clause nodes and Connector nodes
+class Where_clause {
+    
+    private:
+        
+        unique_ptr<Clause> clause_head;
+        Clause *clause_tail;
+
+        Connector *connector_hold;
+
+    public:
+        enum class NodeType {
+            CLAUSE,
+            CONNECTOR
+        };
+
+        void flip(NodeType& t) {
+            if (t == NodeType::CLAUSE) t = NodeType::CONNECTOR;
+            else t = NodeType::CLAUSE;
+        }
+
+        NodeType tail_type = NodeType::CLAUSE;
+
+        Where_clause() : clause_head(nullptr), 
+                         clause_tail(nullptr),
+                         connector_hold(nullptr) {}
+
+        void append_clause(const Comparison& c, const bool is_negated) {
+            auto temp = make_unique<Clause>();
+            temp->comparison = c;
+            if(is_negated) {
+                temp->is_negated = true;
+            }
+            if (clause_head == nullptr) {
+                clause_head = move(temp);
+                clause_tail = clause_head.get();
+                flip(tail_type);
+            }
+            else {
+                connector_hold->next = move(temp);
+                clause_tail = connector_hold->next.get();
+                flip(tail_type);
+            }
+        }
+        void append_connector(const ConnType& t) {
+            auto temp = make_unique<Connector>();
+            temp->type = t;
+            
+            connector_hold = temp.get();
+            clause_tail->connector = move(temp);
+            flip(tail_type);
+        }
+        void print_clause() {
+            
+            NodeType current_type = NodeType::CLAUSE;
+            Clause *current_clause = clause_head.get();
+
+            while(true) {
+                
+                if(current_type == NodeType::CLAUSE) {
+                    if(current_clause->is_negated) {
+                        cout << "NOT ";
+                    }
+                    cout << current_clause->comparison.attribute.value << " " 
+                      << current_clause->comparison.comparator.value << " " 
+                      << current_clause->comparison.value.value << endl;
+                    flip(current_type);
+                    if(current_clause->connector == nullptr) {
+                        break;
+                    }
+
+                }
+                else if(current_type == NodeType::CONNECTOR) {
+                    switch(current_clause->connector->type) {
+
+                        case ConnType::AND:
+                            cout << "AND" << endl;
+                            break;
+                        case ConnType::OR:
+                            cout << "OR" << endl;
+                            break;
+
+                    }
+                    
+                    current_clause = current_clause->connector->next.get();
+                    flip(current_type);
+                }
+            }
+          
+        }
+
 };
 
 struct INSERT_AST {
@@ -103,23 +197,23 @@ struct INSERT_AST {
 
 struct SELECT_AST {
 
-    string table;
+    Token table;
     vector<Token> attributes;
-    unique_ptr<Where_clause> clause;
+    unique_ptr<Where_clause> where_clauses;
 
 };
 
 struct DELETE_AST {
 
-    string table;
+    Token table;
     Where_clause clause;
     
 };
 
 struct UPDATE_AST {
 
-    string table;
-    vector<comparison> set;
+    Token table;
+    vector<Comparison> set;
     Where_clause clause;
 
 };
@@ -156,7 +250,8 @@ class Parser {
             cursor++;
             return;
         }
-        string peek() { 
+        string peek() {
+            if(cursor >= tokens.size()) return "END";
             return tokens[cursor].value;
         };
         Token consume() {
@@ -215,68 +310,52 @@ class Parser {
               return values;
         }
 
-        comparison return_comparison() {
-            comparison comp;
-            if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'INTO'");
+        Comparison return_comparison() {
+            Comparison comp;
+
+            if(isKeyWord(peek())) throw runtime_error("Expected attribute in 'WHERE' clause");
             comp.attribute = consume();
+            if(!isKeyComparator(peek())) throw runtime_error("Expected comparator token after attribute declaration in 'WHERE' clause");
+            comp.comparator = consume();
+            if(isKeyWord(peek())) throw runtime_error("Expected value after comparator token in 'WHERE' clause");
+            comp.value = consume();
 
+            return comp;
         }
 
-        Where_clause handle_where_clauses() {
+        unique_ptr<Where_clause> handle_where_clauses() {
+            
+            auto where_clause = make_unique<Where_clause>();
 
-        unique_ptr<Where_clause> handle_where_clauses() { 
-            bool is_connector = false; 
-            unique_ptr<Where_clause> clause_head = nullptr; 
-            unique_ptr<Where_clause> clause_tail = nullptr; 
+            while( cursor < tokens.size() && tokens[cursor].type != TokenType::END ) {
+                
+                if(where_clause->tail_type == Where_clause::NodeType::CLAUSE) {
+                    bool is_negated = false;
+                    if (match("NOT")) {
+                        is_negated = true;
+                    }
+                    Comparison comp = return_comparison();
+                    where_clause->append_clause(comp, is_negated);
+                }
+                else if(where_clause->tail_type == Where_clause::NodeType::CONNECTOR) {
+                    ConnType type;
 
-            unique_ptr<Where_clause> connector_tail = nullptr; 
-
-            while ( cursor != tokens.size() ) { 
-                if(!is_connector) { 
-                    if(clause_head == nullptr) { 
-                        if ( match("NOT") ) { 
-                            clause_head->is_negated = true; 
-                        } 
-
-                        clause_head->comparison = return_comparison(); 
-                        clause_tail = clause_head; 
-                    } else if(clause_head != nullptr) { 
-                        
-                        auto temp_clause = make_unique<Where_clause>(); 
-
-                        if ( match("NOT") ) { 
-                            temp_clause->is_negated = true; 
-                        } 
-
-                        temp_clause->comparison = return_comparison(); 
-                        connection_hold->next = temp_clause; 
-                        clause_tail = temp_clause; 
-                    } 
-
-                    if( cursor == tokens.size() ) { 
-                        break; 
-                    } 
-                    else if( (peek() == "OR") || (peek() == "AND") ) { 
-                        is_connector = true; 
-                        continue; 
-                    } else { 
-                        throw runtime_error("Expected tokens 'OR' or 'AND' at 'WHERE' clause"); 
-                    } 
-              
-                if(is_connector) { 
-                    connector_hold = make_unique<Connector>(); 
-                    
-                    if( match("AND") ) { 
-                        connector_hold->type = ConnType::AND; 
-                    } else if( match("OR") ) { 
-                        connector_hold->type = ConnType::OR; 
-                    } 
-
-                    clause_tail.connector = connector_hold; 
-                    is_connector = false; 
-                } 
-            } 
+                    if (match("AND")) {
+                        type = ConnType::AND;
+                    }
+                    else if(match("OR")) {
+                        type = ConnType::OR;
+                    }
+                    else {
+                        throw runtime_error("Expected tokens 'AND' or 'OR' between clauses");
+                    }
+                    skip();
+                    where_clause->append_connector(type);
+                }
+            }
+            return where_clause;
         }
+
         vector<Token> tokenize(const string& input) {
             vector<Token> tokens;
             string current;
@@ -391,7 +470,6 @@ class Parser {
 
                     expect("(");
                     insert.attributes = handle_parenthesis();
-                                cout << peek() << endl;
 
                     expect("VALUES");
                     expect("(");
@@ -404,20 +482,22 @@ class Parser {
                     SELECT_AST select;
 
                     if ( peek() == "*" ) {
-                        select.attributes.push_back(comsume());
+                        select.attributes.push_back(consume());
                     }
                     else {
                         expect("(");
-                        select.attributes = handle_parenthesis(); 
+                        select.attributes = handle_parenthesis();
                     }
 
                     expect("FROM");
                     if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
-                    insert.table = consume();
+                    select.table = consume();
                     
                     if ( match("WHERE") ) {
-                        
+                        select.where_clauses = handle_where_clauses();
                     }                    
+
+                    command.AST = move(select);
 
                     }
                     break;
@@ -454,19 +534,28 @@ class Parser {
             for (auto val : conn.values) {
                 cout << val.value << endl; 
             }
-      }
-
+        }
+        void execute_se(SELECT_AST& conn) {
+            cout << "Table: " << conn.table.value << endl;
+            cout << "Attributes: " << endl;
+            for(auto att : conn.attributes) {
+                cout << att.value << endl;
+            }
+            cout << "WHERE clauses: " << endl;
+            conn.where_clauses->print_clause();         
+        }
+      
 
 };
 
 int main() {
-    string input = "INSERT INTO dudes (name, age, grade) VALUES ('Kirche', 28, 12.5)"; 
+    string input = "SELECT (name, age) FROM dudes WHERE age = 19 AND NOT grade = 1.2"; 
     
     try {
         COMMAND command;
         Parser parser(input);
         command = parser.parse();
-        parser.execute_in(get<INSERT_AST>(command.AST));
+        parser.execute_se(get<SELECT_AST>(command.AST));
     }
     catch (const runtime_error& e) {
         cerr << "Error: " << e.what() << endl;
