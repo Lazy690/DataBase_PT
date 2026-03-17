@@ -16,7 +16,11 @@ void update(string table,string value) {cout << "Updating: " << value << " From 
 map<string, void(*)(string, string)> action_map = {{"INSERT", &insert}, {"SELECT", &select}, {"DELETE", &delete_}, {"UPDATE", &update}};
 
 vector<string> KeyWords {
-
+      
+      "CREATE",
+      "DROP",
+      "TABLE",
+      "IF NOT EXISTS",
       "INSERT",
       "SELECT",
       "DELETE",
@@ -54,10 +58,14 @@ enum class TokenType {
 };
 
 enum class Action {
+    
+    CREATE,
+    DROP,
     INSERT,
     SELECT,
     DELETE,
     UPDATE
+
 };
 
 enum class ConnType {
@@ -187,6 +195,18 @@ class Where_clause {
 
 };
 
+struct CREATE_AST {
+
+
+
+};
+
+struct DROP_AST {
+
+
+
+};
+
 struct INSERT_AST {
 
     Token table;
@@ -221,25 +241,15 @@ struct UPDATE_AST {
 struct COMMAND{
     
     Action ACTION;
-    variant<INSERT_AST, SELECT_AST, DELETE_AST, UPDATE_AST> AST;
+    variant<CREATE_AST, DROP_AST, INSERT_AST, SELECT_AST, DELETE_AST, UPDATE_AST> AST;
 
 };
 
 Action returnAction(string a) {
-    map<string, Action> m = {{"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
+    map<string, Action> m = {{"CREATE", Action::CREATE}, {"DROP", Action::DROP}, {"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
     return m[a];
 }
 
-string collect_set(int& cursor, vector<Token> tokens)  {
-      
-      string set;    
-      while(tokens[cursor].value != "WHERE") {
-          set += tokens[cursor].value;
-          set += " ";
-          cursor++;
-      } 
-      return set;
-}
 class Parser {
 
     private:
@@ -356,7 +366,6 @@ class Parser {
 
 
         }
-
 
         unique_ptr<Where_clause> handle_where_clauses() {
             
@@ -476,7 +485,28 @@ class Parser {
             
             tokens.push_back({TokenType::END, ""});
             return tokens;
-        }    
+        }   
+        void print_attributes(vector<Token> a) {
+            cout << "Attributes: " << endl;
+            for(auto att : a) {
+                cout << att.value << endl;
+            }
+        }
+        void print_set(vector<Comparison> s) {
+            cout << "SET: " << endl;
+            for(auto comp : s) {
+                cout << comp.attribute.value << " "
+                  << comp.comparator.value << " "
+                  << comp.value.value << endl;
+            }
+        }
+        void print_values(vector<Token> v) {
+            cout << "Values: " << endl;
+            for (auto val : v) {
+                cout << val.value << endl; 
+            }
+        }
+
     public:
     
         Parser(string input) {
@@ -557,6 +587,7 @@ class Parser {
                     }
         
                 case Action::UPDATE:
+                    {
                     UPDATE_AST update;
 
                     if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'UPDATE'");
@@ -569,62 +600,35 @@ class Parser {
                     update.where_clauses = handle_where_clauses();
                     
                     command.AST = move(update);
-
+      
                     break;
-
+                    }
             }
 
             return command;
         }
-        void execute(COMMAND& comm) {
-            cout << "Attributes: " << endl;
-            if (holds_alternative<INSERT_AST>(comm.AST)) {
-                for(auto att : get<INSERT_AST>(comm.AST).attributes) {
-                    cout << att.value << endl;
-                }
-                cout << "Values: " << endl;
-                for (auto val : get<INSERT_AST>(comm.AST).values) {
-                    cout << val.value << endl; 
-                }
+           
+        template<typename T>
+        void print_AST(const T& ast) {
+            
+            
+            cout << "Table: " << ast.table.value << endl;
+            
+            if constexpr (is_same_v<T, INSERT_AST>) {
+                print_attributes(ast.attributes);
+                print_values(ast.values);
+                return;
             }
-        }
-        void execute_in(INSERT_AST& conn) {
-            cout << "Attributes: " << endl;
-            for(auto att : conn.attributes) {
-                cout << att.value << endl;
+            else if constexpr (is_same_v<T, SELECT_AST>) {
+                print_attributes(ast.attibutes);
             }
-            cout << "Values: " << endl;
-            for (auto val : conn.values) {
-                cout << val.value << endl; 
+            else if constexpr (is_same_v<T, UPDATE_AST>) {
+                print_set(ast.set);
             }
-        }
-        void execute_se(SELECT_AST& conn) {
-            cout << "Table: " << conn.table.value << endl;
-            cout << "Attributes: " << endl;
-            for(auto att : conn.attributes) {
-                cout << att.value << endl;
-            }
-            if(conn.where_clauses == nullptr) return;
+
+            if(ast.where_clauses == nullptr) return;
             cout << "WHERE clauses: " << endl;
-            conn.where_clauses->print_clause();         
-        }
-        void execute_de(DELETE_AST& conn) {
-            cout << "Table: " << conn.table.value << endl;
-            if(conn.where_clauses == nullptr) return;
-            cout << "WHERE clauses: " << endl;
-            conn.where_clauses->print_clause();         
-        }
-        void execute_up(UPDATE_AST& conn) {
-            cout << "Table: " << conn.table.value << endl;
-            cout << "SET: " << endl;
-            for(auto comp : conn.set) {
-                cout << comp.attribute.value << " "
-                  << comp.comparator.value << " "
-                  << comp.value.value << endl;
-            }
-            if(conn.where_clauses == nullptr) return;
-            cout << "WHERE clauses: " << endl;
-            conn.where_clauses->print_clause();         
+            ast.where_clauses->print_clause();         
         }
 };
 
@@ -635,7 +639,7 @@ int main() {
         COMMAND command;
         Parser parser(input);
         command = parser.parse();
-        parser.execute_up(get<UPDATE_AST>(command.AST));
+        parser.print_AST(get<UPDATE_AST>(command.AST));
     }
     catch (const runtime_error& e) {
         cerr << "Error: " << e.what() << endl;
