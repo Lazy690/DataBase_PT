@@ -718,11 +718,15 @@ class Parser {
                     
                 case Action::DROP:
                     {
+                    
+                    DROP_AST drop;
 
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'DROP'");
+                    drop.table = consume();
 
-
-                        break;
+                    command.AST = drop;
                     }
+                    break;
                 case Action::INSERT: 
                     { 
 
