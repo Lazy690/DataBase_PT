@@ -20,7 +20,9 @@ vector<string> KeyWords {
       "CREATE",
       "DROP",
       "TABLE",
-      "IF NOT EXISTS",
+      "IF",
+      "NOT",
+      "EXISTS",
       "INSERT",
       "SELECT",
       "DELETE",
@@ -30,7 +32,12 @@ vector<string> KeyWords {
       "INTO",
       "WHERE",
       "SET",
-      "*"
+      "*",
+      "UNIQUE",
+      "AUTO_INCRIMENT",
+      "NOT_NULL",
+      "PRIMARY_KEY",
+      "FOREIGN_KEY"
 
 };
 vector<string> Comparators {
@@ -43,7 +50,7 @@ vector<string> Comparators {
   
 };
 
-bool isInVector(string value, vector<string> v) {
+bool isInVector(const string& value, vector<string> v) {
     auto it = find(v.begin(), v.end(), value);
     if(it == v.end()) return false;
     return true;
@@ -195,15 +202,61 @@ class Where_clause {
 
 };
 
+enum class Constraint {
+
+    UNIQUE,
+    AUTO_INCRIMENT,
+    NOT_NULL,
+    PRIMARY_KEY,
+    FOREIGN_KEY
+
+};
+
+enum class DataType {
+
+    INT,
+    DOUBLE,
+    TEXT
+
+};
+
+vector<string> constraints_vec {
+    "UNIQUE",
+    "AUTO_INCRIMENT",
+    "NOT_NULL",
+    "PRIMARY_KEY",
+    "FOREIGN_KEY"
+};
+
+struct Constraints_list {
+
+    bool unique = false;
+    bool auto_incriment = false;
+    bool not_null = false;
+    bool primary_key = false;
+    bool foreign_key = false;
+
+};
+
+struct Column_AST {
+
+    Token name;
+    DataType type;
+    Constraints_list constraints;
+
+};
+
 struct CREATE_AST {
 
-
+    bool is_overrite = true;
+    Token table;
+    vector<Column_AST> columns;  
 
 };
 
 struct DROP_AST {
 
-
+    Token table;
 
 };
 
@@ -249,6 +302,16 @@ Action returnAction(string a) {
     map<string, Action> m = {{"CREATE", Action::CREATE}, {"DROP", Action::DROP}, {"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
     return m[a];
 }
+Constraint returnConstraint(string c) {
+    map<string, Constraint> m = {{"UNIQUE", Constraint::UNIQUE}, {"AUTO_INCRIMENT", Constraint::AUTO_INCRIMENT}, 
+                              {"NOT_NULL", Constraint::NOT_NULL}, {"PRIMARY_KEY", Constraint::PRIMARY_KEY}, 
+                              {"FOREIGN_KEY", Constraint::FOREIGN_KEY}};
+    return m[c];
+}
+DataType returnDataType(string t) {
+    map<string, DataType> m = {{"INT", DataType::INT}, {"TEXT", DataType::TEXT}, {"DOUBLE", DataType::DOUBLE}};
+    return m[t];
+}
 
 class Parser {
 
@@ -281,6 +344,10 @@ class Parser {
             }
             return consume();
         };
+        bool is_END() {
+            if(tokens[cursor].type == TokenType::END) return true;
+            return false;
+        }
 
 
 
@@ -289,6 +356,9 @@ class Parser {
         }
         bool isKeyComparator(const string& word) {
             return isInVector(word, Comparators);
+        }
+        bool isKeyConstraint(const string& word) {
+            return isInVector(word, constraints_vec);
         }
         int getEndOfParenthesis() {
             for (int i = cursor; i < tokens.size(); i++) {
@@ -302,7 +372,6 @@ class Parser {
             }
             return 0;
         }
-
 
 
 
@@ -365,6 +434,103 @@ class Parser {
             return comps;
 
 
+        }
+
+        vector<Column_AST> handle_column_ast() {
+            vector<Column_AST> cols;
+            int endof_parenthesis = getEndOfParenthesis();
+            if(endof_parenthesis == 0) throw runtime_error("Token '(' was not closed.");
+            bool expect_value = true;
+
+            while(cursor != endof_parenthesis) {
+                
+                Column_AST col;
+
+                if(expect_value) {
+                    //cout << "Expect value" << endl;                    
+                    if(isKeyWord(peek())) throw runtime_error("Expected column name");
+                    //cout << "----------------" << endl;
+                    col.name = consume();
+                    //cout << "Before type: " << peek() << endl;
+                    col.type = returnDataType(peek());
+                    skip();
+                    //cout << "After type: " << peek() << endl;
+
+                    //cout << "----------------" << endl;
+                    if(peek() == "," ) {
+                        expect_value = false;
+                        cols.push_back(col);
+                        continue;
+                    } 
+
+                    vector<string> track_constraints;
+                    Constraints_list list;
+                    int count = 1;
+                    while(peek() != "," && cursor != endof_parenthesis) {
+                        //cout << "Token: " << peek() << endl;
+                        
+                        if(!isKeyConstraint(peek())) throw runtime_error("Invalid column Constraint token");
+                        if(isInVector(peek(), track_constraints)) throw runtime_error("Duplicate Constrate tokens not alowed.");
+                        
+
+                        if(peek() == "UNIQUE") {
+                            list.unique = true;
+                            track_constraints.push_back(peek());
+                            skip();
+                            continue;
+                        }
+                        else if(peek() == "NOT_NULL") {
+                            list.not_null = true;
+                            track_constraints.push_back(peek());
+                            skip();
+                            continue;
+                        }
+
+                        else if(peek() == "AUTO_INCRIMENT") {
+                            if(col.type != DataType::INT) throw ("Non INT types cannot be assigned 'AUTO_INCIMENT' token.");
+
+                            list.auto_incriment = true;
+                            track_constraints.push_back(peek());
+                            skip();
+                            continue;
+                        }
+                        else if(peek() == "PRIMARY_KEY") {
+                            if(col.type != DataType::INT) throw ("Non INT types cannot be assigned 'PRIMARY_KEY' token.");
+                            if(list.foreign_key != false) throw ("Column cannot be 'PRIMARY_KEY' and 'FOREIGN_KEY' at the same time");
+
+                            list.primary_key = true;
+                            track_constraints.push_back(peek());
+                            skip();
+                            continue;
+                        }
+                        else if(peek() == "FOREIGN_KEY") {
+                            if(col.type != DataType::INT) throw ("Non INT types cannot be assigned 'FOREIGN_KEY' token.");
+                            if(list.primary_key != false) throw ("Column cannot be 'PRIMARY_KEY' and 'FOREIGN_KEY' at the same time");
+
+                            list.primary_key = true;
+                            track_constraints.push_back(peek());
+                            skip();
+                            continue;
+                        }
+                        else {
+                            throw runtime_error("Invalid constraint token");
+                        }
+                  
+                    }
+                    
+                    col.constraints = list;
+                    cols.push_back(col); 
+                    expect_value = false;
+                }
+                else {
+                    //cout << "Not expect value" << endl;
+                    if(peek() != ",") throw runtime_error("Expected ',' between values");
+                  skip();
+                    expect_value = true;
+                }
+            }
+            skip();
+            return cols;
         }
 
         unique_ptr<Where_clause> handle_where_clauses() {
@@ -518,12 +684,45 @@ class Parser {
         COMMAND parse() {
     
             COMMAND command;
-            cout << peek() << endl;
             command.ACTION = returnAction(peek());
             skip();
             
             switch(command.ACTION) {
+
+                case Action::CREATE:
+                    {
                 
+                    CREATE_AST create;
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'CREATE'");
+                    create.table = consume();
+                    
+                    if(match("IF")) {
+                        if(match("NOT")) {
+                            if(match("EXISTS")) {
+                                create.is_overrite = false;
+                            }
+                            else throw runtime_error("Invalid syntax after 'IF' token");
+                            
+                        }
+                        else throw runtime_error("Invalid syntax after 'IF' token");
+                    }
+
+                    if(match("(")) {
+                        create.columns = handle_column_ast();
+                    }
+
+                    command.AST = create;
+                    }
+                    break;
+                    
+                case Action::DROP:
+                    {
+
+
+
+                        break;
+                    }
                 case Action::INSERT: 
                     { 
 
@@ -604,7 +803,6 @@ class Parser {
                     break;
                     }
             }
-
             return command;
         }
            
@@ -614,6 +812,29 @@ class Parser {
             
             cout << "Table: " << ast.table.value << endl;
             
+            if constexpr (is_same_v<T, CREATE_AST>) {
+                
+                if(ast.is_overrite) {
+                    cout << "Will overrite table" << endl;
+                }
+                cout << "Columns: " << endl;
+                
+                for(auto col : ast.columns) {
+                    cout << "Name: " << col.name.value << endl;
+                    cout << "Constraints: " << endl;
+                    if(col.constraints.unique) cout << "UNIQUE" << endl;
+                    if(col.constraints.auto_incriment) cout << "AUTO_INCRIMENT" << endl;
+                    if(col.constraints.not_null) cout << "NOT_NULL" << endl;
+                    if(col.constraints.primary_key) cout << "PRIMARY_KEY" << endl;
+                    if(col.constraints.foreign_key) cout << "FOREIGN_KEY" << endl;
+                    cout << "-------------------------" << endl;
+                }
+                return;
+            }
+            if constexpr (is_same_v<T, DROP_AST>) {
+                cout << "Table dropped." << endl;
+                return;
+            }
             if constexpr (is_same_v<T, INSERT_AST>) {
                 print_attributes(ast.attributes);
                 print_values(ast.values);
@@ -625,21 +846,23 @@ class Parser {
             else if constexpr (is_same_v<T, UPDATE_AST>) {
                 print_set(ast.set);
             }
-
-            if(ast.where_clauses == nullptr) return;
-            cout << "WHERE clauses: " << endl;
-            ast.where_clauses->print_clause();         
+            
+            if constexpr (is_same_v<T, UPDATE_AST> || is_same_v<T, SELECT_AST>) {
+                if(ast.where_clauses == nullptr) return;
+                cout << "WHERE clauses: " << endl;
+                ast.where_clauses->print_clause();         
+            }
         }
 };
 
 int main() {
-    string input = "UPDATE dudes SET name = 'Verstalt', age = 29 WHERE name = 'Kirsche' AND NOT age = 18"; 
+    string input = "DROP dudes"; 
     
     try {
         COMMAND command;
         Parser parser(input);
         command = parser.parse();
-        parser.print_AST(get<UPDATE_AST>(command.AST));
+        parser.print_AST(get<DROP_AST>(command.AST));
     }
     catch (const runtime_error& e) {
         cerr << "Error: " << e.what() << endl;
