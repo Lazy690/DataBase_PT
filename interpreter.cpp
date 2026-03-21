@@ -283,12 +283,9 @@ struct UPDATE_AST {
 
 };
 
-struct COMMAND{
-    
-    Action ACTION;
-    variant<CREATE_AST, DROP_AST, INSERT_AST, SELECT_AST, DELETE_AST, UPDATE_AST> AST;
+using AST = variant<CREATE_AST, DROP_AST, INSERT_AST, SELECT_AST, DELETE_AST, UPDATE_AST>;
 
-};
+
 
 Action returnAction(string a) {
     map<string, Action> m = {{"CREATE", Action::CREATE}, {"DROP", Action::DROP}, {"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
@@ -313,6 +310,96 @@ DataType returnDataType(string t) {
     }
     
 }
+
+class Lexer {
+    public:
+        vector<Token> run(const string& input) {
+            vector<Token> tokens;
+            string current;
+
+            for (size_t i = 0; i < input.size(); i++) {
+                char c = input[i];
+
+                // 1 Skip whitespace
+                if (isspace(c)) {
+                    continue;
+                }
+
+                  // 2 String literal
+                  if (c == '\'') {
+                      current = "";
+                      i++; // move past opening quote
+
+                      while (i < input.size() && input[i] != '\'') {
+                          current += input[i];
+                          i++;
+                      }
+
+                      tokens.push_back({TokenType::STRING, current});
+                    continue;
+                }
+
+                // 3 Two-character operators
+                if ((c == '<' || c == '>' || c == '!' || c == '=') &&
+                    i + 1 < input.size() && input[i + 1] == '=') {
+                    
+                    string op;
+                    op += c;
+                    op += '=';
+
+                    tokens.push_back({TokenType::OPERATOR, op});
+                    i++; // skip second char
+                    continue;
+                }
+
+                // 4 Single-character operators
+                if (c == '<' || c == '>' || c == '=' || c == '+' || c == '-' || c == '*' || c == '(' || c == ')' || c == ',') {
+                    tokens.push_back({TokenType::OPERATOR, string(1, c)});
+                    continue;
+                }
+
+                // 5 Number
+                if (isdigit(c)) {
+                    current = "";
+
+                    while (i < input.size() && (isdigit(input[i]) || input[i] == '.')) {
+                        current += input[i];
+                        i++;
+                    }
+
+                    tokens.push_back({TokenType::NUMBER, current});
+                    i--; // adjust because loop increments
+                    continue;
+               }
+
+                // 6 Identifier
+                if (isalpha(c) || c == '_') {
+                    current = "";
+
+                    while (i < input.size() &&
+                          (isalnum(input[i]) || input[i] == '_')) {
+                        current += input[i];
+                        i++;
+                    }
+
+                    tokens.push_back({TokenType::IDENTIFIER, current});
+                    i--;
+                    continue;
+                }
+
+                // 7 Unknown character
+                throw runtime_error("Unknown character detected.");
+            }
+           
+
+            //for (auto& t : tokens) {
+            //    cout << static_cast<int>(t.type) << " : " << t.value << endl;
+            //}
+            
+            tokens.push_back({TokenType::END, ""});
+            return tokens;
+        }           
+};
 
 class Parser {
 
@@ -561,93 +648,199 @@ class Parser {
             return where_clause;
         }
 
-        vector<Token> tokenize(const string& input) {
-            vector<Token> tokens;
-            string current;
-
-            for (size_t i = 0; i < input.size(); i++) {
-                char c = input[i];
-
-                // 1 Skip whitespace
-                if (isspace(c)) {
-                    continue;
-                }
-
-                  // 2 String literal
-                  if (c == '\'') {
-                      current = "";
-                      i++; // move past opening quote
-
-                      while (i < input.size() && input[i] != '\'') {
-                          current += input[i];
-                          i++;
-                      }
-
-                      tokens.push_back({TokenType::STRING, current});
-                    continue;
-                }
-
-                // 3 Two-character operators
-                if ((c == '<' || c == '>' || c == '!' || c == '=') &&
-                    i + 1 < input.size() && input[i + 1] == '=') {
-                    
-                    string op;
-                    op += c;
-                    op += '=';
-
-                    tokens.push_back({TokenType::OPERATOR, op});
-                    i++; // skip second char
-                    continue;
-                }
-
-                // 4 Single-character operators
-                if (c == '<' || c == '>' || c == '=' || c == '+' || c == '-' || c == '*' || c == '(' || c == ')' || c == ',') {
-                    tokens.push_back({TokenType::OPERATOR, string(1, c)});
-                    continue;
-                }
-
-                // 5 Number
-                if (isdigit(c)) {
-                    current = "";
-
-                    while (i < input.size() && (isdigit(input[i]) || input[i] == '.')) {
-                        current += input[i];
-                        i++;
-                    }
-
-                    tokens.push_back({TokenType::NUMBER, current});
-                    i--; // adjust because loop increments
-                    continue;
-               }
-
-                // 6 Identifier
-                if (isalpha(c) || c == '_') {
-                    current = "";
-
-                    while (i < input.size() &&
-                          (isalnum(input[i]) || input[i] == '_')) {
-                        current += input[i];
-                        i++;
-                    }
-
-                    tokens.push_back({TokenType::IDENTIFIER, current});
-                    i--;
-                    continue;
-                }
-
-                // 7 Unknown character
-                throw runtime_error("Unknown character detected.");
-            }
-           
-
-            //for (auto& t : tokens) {
-            //    cout << static_cast<int>(t.type) << " : " << t.value << endl;
-            //}
+        
+        
+    public:
+    
+        explicit Parser(const vector<Token>& t) {
             
-            tokens.push_back({TokenType::END, ""});
-            return tokens;
-        }   
-        void print_attributes(vector<Token> a) {
+            tokens = t;
+
+        }
+    
+        AST run() {
+    
+            AST ast;
+            Action action = returnAction(peek());
+            skip();
+            
+            switch(action) {
+
+                case Action::CREATE:
+                    {
+                
+                    CREATE_AST create;
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'CREATE'");
+                    create.table = consume();
+                    
+                    if(match("IF")) {
+                        if(match("NOT")) {
+                            if(match("EXISTS")) {
+                                create.is_overrite = false;
+                            }
+                            else throw runtime_error("Invalid syntax after 'IF' token");
+                            
+                        }
+                        else throw runtime_error("Invalid syntax after 'IF' token");
+                    }
+
+                    if(match("(")) {
+                        create.columns = handle_column_ast();
+                    }
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
+                    ast = create;
+                    }
+                    break;
+                    
+                case Action::DROP:
+                    {
+                    
+                    DROP_AST drop;
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'DROP'");
+                    drop.table = consume();
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
+
+                    ast = drop;
+                    }
+                    break;
+                case Action::INSERT: 
+                    { 
+
+                    INSERT_AST insert;
+                    expect("INTO");
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'INTO'");
+                    insert.table = consume();
+
+                    expect("(");
+                    insert.attributes = handle_parenthesis();
+
+                    expect("VALUES");
+                    expect("(");
+                    insert.values = handle_parenthesis();
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
+                    ast = insert;
+                    }
+                    break;
+                case Action::SELECT: {
+
+                    SELECT_AST select;
+
+                    if ( peek() == "*" ) {
+                        select.attributes.push_back(consume());
+                    }
+                    else {
+                        expect("(");
+                        select.attributes = handle_parenthesis();
+                    }
+
+                    expect("FROM");
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
+                    select.table = consume();
+                    
+                    if ( match("WHERE") ) {
+                        select.where_clauses = handle_where_clauses();
+                    }                    
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
+
+                    ast = move(select);
+
+                    }
+                    break;
+                    
+                case Action::DELETE:
+                    {
+
+                    DELETE_AST delete_;
+
+                    expect("FROM");
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
+                    delete_.table = consume();
+                    
+                    if ( match("WHERE") ) {
+                        delete_.where_clauses = handle_where_clauses();
+                    }                    
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
+
+                    ast = move(delete_);
+
+                    break;
+                    }
+        
+                case Action::UPDATE:
+                    {
+                    UPDATE_AST update;
+
+                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'UPDATE'");
+                    update.table = consume();
+
+                    expect("SET");
+
+                    update.set = handle_set();
+
+                    update.where_clauses = handle_where_clauses();
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
+                    
+                    ast = move(update);
+      
+                    break;
+                    }
+            }
+            return ast;
+        }
+           
+        template<typename T>
+        void print_AST(const T& ast) {
+            
+            
+            cout << "Table: " << ast.table.value << endl;
+            
+            if constexpr (is_same_v<T, CREATE_AST>) {
+                print_overrite(ast.is_overrite);
+                print_create_cols(ast.columns);
+                return;
+            }
+            if constexpr (is_same_v<T, DROP_AST>) {
+                cout << "Table dropped." << endl;
+                return;
+            }
+            if constexpr (is_same_v<T, INSERT_AST>) {
+                print_attributes(ast.attributes);
+                print_values(ast.values);
+                return;
+            }
+            else if constexpr (is_same_v<T, SELECT_AST>) {
+                print_attributes(ast.attibutes);
+            }
+            else if constexpr (is_same_v<T, UPDATE_AST>) {
+                print_set(ast.set);
+            }
+            
+            if constexpr (is_same_v<T, UPDATE_AST> || is_same_v<T, SELECT_AST>) {
+                if(ast.where_clauses == nullptr) return;
+                cout << "WHERE clauses: " << endl;
+                ast.where_clauses->print_clause();         
+            }
+        }
+};
+
+AST Interpreter::run(const string& input) {
+    try {
+        Lexer lexer;
+        Parser parser(lexer.run(input));
+        AST ast = parser.run();
+        return ast;
+    } catch (const runtime_error& e)
+    {
+        cerr << "Syntax Error: " << e.what() << endl;
+        throw;
+    } 
+};
+
+void print_attributes(vector<Token> a) {
             cout << "Attributes: " << endl;
             for(auto att : a) {
                 cout << att.value << endl;
@@ -687,194 +880,54 @@ class Parser {
             }
         }
 
-    public:
+template<typename T>
+void print_AST(const T& ast) {
+     
+    cout << "Table: " << ast.table.value << endl;
     
-        Parser(string input) {
-
-            tokens = tokenize(input);
-
-        }
+    if constexpr (is_same_v<T, CREATE_AST>) {
+        print_overrite(ast.is_overrite);
+        print_create_cols(ast.columns);
+        return;
+    }
+    if constexpr (is_same_v<T, DROP_AST>) {
+        cout << "Table dropped." << endl;
+        return;
+    }
+    if constexpr (is_same_v<T, INSERT_AST>) {
+        print_attributes(ast.attributes);
+        print_values(ast.values);
+        return;
+    }
+    else if constexpr (is_same_v<T, SELECT_AST>) {
+        print_attributes(ast.attibutes);
+    }
+    else if constexpr (is_same_v<T, UPDATE_AST>) {
+        print_set(ast.set);
+    }
     
-        COMMAND parse() {
-    
-            COMMAND command;
-            command.ACTION = returnAction(peek());
-            skip();
-            
-            switch(command.ACTION) {
+    if constexpr (is_same_v<T, UPDATE_AST> || is_same_v<T, SELECT_AST>) {
+        if(ast.where_clauses == nullptr) return;
+        cout << "WHERE clauses: " << endl;
+        ast.where_clauses->print_clause();         
+    }
+}
 
-                case Action::CREATE:
-                    {
-                
-                    CREATE_AST create;
-
-                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'CREATE'");
-                    create.table = consume();
-                    
-                    if(match("IF")) {
-                        if(match("NOT")) {
-                            if(match("EXISTS")) {
-                                create.is_overrite = false;
-                            }
-                            else throw runtime_error("Invalid syntax after 'IF' token");
-                            
-                        }
-                        else throw runtime_error("Invalid syntax after 'IF' token");
-                    }
-
-                    if(match("(")) {
-                        create.columns = handle_column_ast();
-                    }
-                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
-                    command.AST = create;
-                    }
-                    break;
-                    
-                case Action::DROP:
-                    {
-                    
-                    DROP_AST drop;
-
-                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'DROP'");
-                    drop.table = consume();
-                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
-
-                    command.AST = drop;
-                    }
-                    break;
-                case Action::INSERT: 
-                    { 
-
-                    INSERT_AST insert;
-                    expect("INTO");
-
-                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'INTO'");
-                    insert.table = consume();
-
-                    expect("(");
-                    insert.attributes = handle_parenthesis();
-
-                    expect("VALUES");
-                    expect("(");
-                    insert.values = handle_parenthesis();
-                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
-                    command.AST = insert;
-                    }
-                    break;
-                case Action::SELECT: {
-
-                    SELECT_AST select;
-
-                    if ( peek() == "*" ) {
-                        select.attributes.push_back(consume());
-                    }
-                    else {
-                        expect("(");
-                        select.attributes = handle_parenthesis();
-                    }
-
-                    expect("FROM");
-                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
-                    select.table = consume();
-                    
-                    if ( match("WHERE") ) {
-                        select.where_clauses = handle_where_clauses();
-                    }                    
-                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
-
-                    command.AST = move(select);
-
-                    }
-                    break;
-                    
-                case Action::DELETE:
-                    {
-
-                    DELETE_AST delete_;
-
-                    expect("FROM");
-
-                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'FROM'");
-                    delete_.table = consume();
-                    
-                    if ( match("WHERE") ) {
-                        delete_.where_clauses = handle_where_clauses();
-                    }                    
-                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
-
-                    command.AST = move(delete_);
-
-                    break;
-                    }
-        
-                case Action::UPDATE:
-                    {
-                    UPDATE_AST update;
-
-                    if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'UPDATE'");
-                    update.table = consume();
-
-                    expect("SET");
-
-                    update.set = handle_set();
-
-                    update.where_clauses = handle_where_clauses();
-                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
-                    
-                    command.AST = move(update);
-      
-                    break;
-                    }
-            }
-            return command;
-        }
-           
-        template<typename T>
-        void print_AST(const T& ast) {
-            
-            
-            cout << "Table: " << ast.table.value << endl;
-            
-            if constexpr (is_same_v<T, CREATE_AST>) {
-                print_overrite(ast.is_overrite);
-                print_create_cols(ast.columns);
-                return;
-            }
-            if constexpr (is_same_v<T, DROP_AST>) {
-                cout << "Table dropped." << endl;
-                return;
-            }
-            if constexpr (is_same_v<T, INSERT_AST>) {
-                print_attributes(ast.attributes);
-                print_values(ast.values);
-                return;
-            }
-            else if constexpr (is_same_v<T, SELECT_AST>) {
-                print_attributes(ast.attibutes);
-            }
-            else if constexpr (is_same_v<T, UPDATE_AST>) {
-                print_set(ast.set);
-            }
-            
-            if constexpr (is_same_v<T, UPDATE_AST> || is_same_v<T, SELECT_AST>) {
-                if(ast.where_clauses == nullptr) return;
-                cout << "WHERE clauses: " << endl;
-                ast.where_clauses->print_clause();         
-            }
-        }
-};
-
-int main() {
-    string input = "CREATE dudes IF NOT EXISTS (id INT PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE, age INT, greade DOUBLE)"; 
-    
+void test_interpreter(const string& input) {
     try {
-        COMMAND command;
-        Parser parser(input);
-        command = parser.parse();
-        parser.print_AST(get<CREATE_AST>(command.AST));
+        Interpreter interpreter;
+        auto ast = interpreter.run(input);
+        print_AST(get<CREATE_AST>(ast));
     }
     catch (const runtime_error& e) {
         cerr << "Syntax Error: " << e.what() << endl;
-        return 1;
+        return;
     }
+}
+
+int main() {
+    
+    string input = "CREATE dudes IF NOT EXISTS (id INT PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE, age INT, greade DOUBLE)"; 
+    test_interpreter(input);
+   
 }
