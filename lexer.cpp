@@ -7,14 +7,6 @@
 #include <memory>
 using namespace std;
 
-void insert(string table, string value) {cout << "Inserting " << value << " Into " << table << endl;}
-void select(string table, string value) {cout << "Selecting: " << value << " From " << table << endl;}
-void delete_(string table, string value) {cout << "Deleting From table: " << table << endl;}
-void update(string table,string value) {cout << "Updating: " << value << " From " << table << endl;}
-
-
-map<string, void(*)(string, string)> action_map = {{"INSERT", &insert}, {"SELECT", &select}, {"DELETE", &delete_}, {"UPDATE", &update}};
-
 vector<string> KeyWords {
       
       "CREATE",
@@ -300,17 +292,26 @@ struct COMMAND{
 
 Action returnAction(string a) {
     map<string, Action> m = {{"CREATE", Action::CREATE}, {"DROP", Action::DROP}, {"INSERT", Action::INSERT}, {"SELECT", Action::SELECT}, {"DELETE", Action::DELETE}, {"UPDATE", Action::UPDATE}};
-    return m[a];
-}
-Constraint returnConstraint(string c) {
-    map<string, Constraint> m = {{"UNIQUE", Constraint::UNIQUE}, {"AUTO_INCRIMENT", Constraint::AUTO_INCRIMENT}, 
-                              {"NOT_NULL", Constraint::NOT_NULL}, {"PRIMARY_KEY", Constraint::PRIMARY_KEY}, 
-                              {"FOREIGN_KEY", Constraint::FOREIGN_KEY}};
-    return m[c];
+    try
+    {
+        return m.at(a);
+    }
+    catch(const out_of_range& ex)
+    {
+        throw runtime_error("Action not recognized as a valid command");
+    }
 }
 DataType returnDataType(string t) {
     map<string, DataType> m = {{"INT", DataType::INT}, {"TEXT", DataType::TEXT}, {"DOUBLE", DataType::DOUBLE}};
-    return m[t];
+    try
+    {
+        return m.at(t);
+    }
+    catch(const out_of_range& ex)
+    {
+        throw runtime_error("Invalied data type token in column initialization");
+    }
+    
 }
 
 class Parser {
@@ -340,7 +341,8 @@ class Parser {
         };
         Token expect(const string& check) {
             if (tokens[cursor].value != check) {
-                throw runtime_error("Invalid syntax");
+                cerr << "Expected token: " << check << endl;
+                throw runtime_error("Invalid token");
             }
             return consume();
         };
@@ -447,16 +449,11 @@ class Parser {
                 Column_AST col;
 
                 if(expect_value) {
-                    //cout << "Expect value" << endl;                    
                     if(isKeyWord(peek())) throw runtime_error("Expected column name");
-                    //cout << "----------------" << endl;
                     col.name = consume();
-                    //cout << "Before type: " << peek() << endl;
                     col.type = returnDataType(peek());
                     skip();
-                    //cout << "After type: " << peek() << endl;
 
-                    //cout << "----------------" << endl;
                     if(peek() == "," ) {
                         expect_value = false;
                         cols.push_back(col);
@@ -467,7 +464,6 @@ class Parser {
                     Constraints_list list;
                     int count = 1;
                     while(peek() != "," && cursor != endof_parenthesis) {
-                        //cout << "Token: " << peek() << endl;
                         
                         if(!isKeyConstraint(peek())) throw runtime_error("Invalid column Constraint token");
                         if(isInVector(peek(), track_constraints)) throw runtime_error("Duplicate Constrate tokens not alowed.");
@@ -523,7 +519,6 @@ class Parser {
                     expect_value = false;
                 }
                 else {
-                    //cout << "Not expect value" << endl;
                     if(peek() != ",") throw runtime_error("Expected ',' between values");
                   skip();
                     expect_value = true;
@@ -645,9 +640,9 @@ class Parser {
             }
            
 
-            for (auto& t : tokens) {
-                cout << static_cast<int>(t.type) << " : " << t.value << endl;
-            }
+            //for (auto& t : tokens) {
+            //    cout << static_cast<int>(t.type) << " : " << t.value << endl;
+            //}
             
             tokens.push_back({TokenType::END, ""});
             return tokens;
@@ -670,6 +665,25 @@ class Parser {
             cout << "Values: " << endl;
             for (auto val : v) {
                 cout << val.value << endl; 
+            }
+        }
+        void print_overrite(const bool c) { 
+            if(c) {
+                cout << "Will overrite table" << endl;
+            }
+        }
+        void print_create_cols(const vector<Column_AST>& c) {
+            cout << "Columns: " << endl;
+            cout << "-------------------------" << endl;
+            for(auto col : c) {
+                cout << "Name: " << col.name.value << endl;
+                cout << "Constraints: " << endl;
+                if(col.constraints.unique) cout << "UNIQUE" << endl;
+                if(col.constraints.auto_incriment) cout << "AUTO_INCRIMENT" << endl;
+                if(col.constraints.not_null) cout << "NOT_NULL" << endl;
+                if(col.constraints.primary_key) cout << "PRIMARY_KEY" << endl;
+                if(col.constraints.foreign_key) cout << "FOREIGN_KEY" << endl;
+                cout << "-------------------------" << endl;
             }
         }
 
@@ -711,7 +725,7 @@ class Parser {
                     if(match("(")) {
                         create.columns = handle_column_ast();
                     }
-
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
                     command.AST = create;
                     }
                     break;
@@ -723,6 +737,7 @@ class Parser {
 
                     if(isKeyWord(peek())) throw runtime_error("Expected table name after token 'DROP'");
                     drop.table = consume();
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
 
                     command.AST = drop;
                     }
@@ -742,6 +757,7 @@ class Parser {
                     expect("VALUES");
                     expect("(");
                     insert.values = handle_parenthesis();
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
                     command.AST = insert;
                     }
                     break;
@@ -764,6 +780,7 @@ class Parser {
                     if ( match("WHERE") ) {
                         select.where_clauses = handle_where_clauses();
                     }                    
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
 
                     command.AST = move(select);
 
@@ -783,6 +800,7 @@ class Parser {
                     if ( match("WHERE") ) {
                         delete_.where_clauses = handle_where_clauses();
                     }                    
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
 
                     command.AST = move(delete_);
 
@@ -801,6 +819,7 @@ class Parser {
                     update.set = handle_set();
 
                     update.where_clauses = handle_where_clauses();
+                    if(!is_END()) throw runtime_error("Invalid tokens at end of command");
                     
                     command.AST = move(update);
       
@@ -817,22 +836,8 @@ class Parser {
             cout << "Table: " << ast.table.value << endl;
             
             if constexpr (is_same_v<T, CREATE_AST>) {
-                
-                if(ast.is_overrite) {
-                    cout << "Will overrite table" << endl;
-                }
-                cout << "Columns: " << endl;
-                
-                for(auto col : ast.columns) {
-                    cout << "Name: " << col.name.value << endl;
-                    cout << "Constraints: " << endl;
-                    if(col.constraints.unique) cout << "UNIQUE" << endl;
-                    if(col.constraints.auto_incriment) cout << "AUTO_INCRIMENT" << endl;
-                    if(col.constraints.not_null) cout << "NOT_NULL" << endl;
-                    if(col.constraints.primary_key) cout << "PRIMARY_KEY" << endl;
-                    if(col.constraints.foreign_key) cout << "FOREIGN_KEY" << endl;
-                    cout << "-------------------------" << endl;
-                }
+                print_overrite(ast.is_overrite);
+                print_create_cols(ast.columns);
                 return;
             }
             if constexpr (is_same_v<T, DROP_AST>) {
@@ -860,16 +865,16 @@ class Parser {
 };
 
 int main() {
-    string input = "DROP dudes"; 
+    string input = "CREATE dudes IF NOT EXISTS (id INT PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE, age INT, greade DOUBLE)"; 
     
     try {
         COMMAND command;
         Parser parser(input);
         command = parser.parse();
-        parser.print_AST(get<DROP_AST>(command.AST));
+        parser.print_AST(get<CREATE_AST>(command.AST));
     }
     catch (const runtime_error& e) {
-        cerr << "Error: " << e.what() << endl;
+        cerr << "Syntax Error: " << e.what() << endl;
         return 1;
     }
 }
