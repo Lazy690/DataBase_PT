@@ -924,3 +924,10 @@ void test_interpreter(const string& input) {
         return;
     }
 }
+
+int main() {
+    
+    string input = "CREATE dudes IF NOT EXISTS (id INT PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE, age INT, greade DOUBLE)"; 
+    test_interpreter(input);
+   
+}
