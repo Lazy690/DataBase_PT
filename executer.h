@@ -1,3 +1,4 @@
+#pragma once
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -7,23 +8,29 @@
 #include <map>
 
 #include "indexer.h"
+#include "classes.h"
 using namespace std;
+
+struct Header_vals {
+  
+    RecordBankHeader record{0x44415441, 2};
+    IndexHeader index{0x44415441, 2};
+
+};
+
+struct Paths {
+    
+    fs::path record_bank;
+    fs::path index;
+
+};
 
 class Executer {
     private:
         RecordBankHeader DBheader{0x44415441, 2};
         IndexHeader Iheader{0x44415441, 2};
-        struct RecordBankHeader; 
-        struct IndexHeader ;
-        struct MetaDataHeader; 
-        enum class DataType : uint8_t ;
-        struct Column;
-        Executer::struct Row {
-            vector<variant<int32_t,  string, double>> values;
-        };
-        struct Header_vals;
-        struct Paths;
 
+        vector<Column> schema;
         uint32_t hold_row_id;
         Row hold_for_indexing;
         uint32_t RecordBank_offset_recording;
@@ -59,13 +66,13 @@ class Executer {
 
     public:
 
-        void INSERT(Paths path, const Row& row);
-        void SELECT_byID(Paths path, int id, Row& row, bool returns_offset = false, int* returned_offset = 0);
-        void SELECT_byValue(Paths path, string& column, variant<int32_t, string, double>& value, vector<Row>& results, bool returns_offset = false, vector<uint32_t>* returned_offsets = {});
-        void DELETE_byID(Paths path, const int id);
-        void DELETE_byID(Paths path, int id, map<string, variant<int32_t, string, double>>& values_map);
-        void UPDATE_byValue(Paths path, string column_to_search, variant<int32_t, string, double>& value_to_search, map<string, variant<int32_t, string, double>>& values_map); 
-        void UPDATE_byValue(Paths path, string column_to_search, variant<int32_t, string, double>& value_to_search, map<string, variant<int32_t, string, double>>& values_map); 
-        void print_row_test(vector<Row> results);
+        void INSERT(Paths& path, const Row& row);
+        void SELECT_byID(Paths& path, int id, Row& row, bool returns_offset = false, int* returned_offset = 0);
+        void SELECT_byValue(Paths& path, string& column, const variant<int32_t, string, double>& value, vector<Row>& results, bool returns_offset = false, vector<uint32_t>* returned_offsets = {});
+        void DELETE_byID(Paths& path, const int id);
+        void DELETE_byValue(Paths& path, int id, map<string, variant<int32_t, string, double>>& values_map);
+        void UPDATE_byID(Paths& path, int id, map<string, variant<int32_t, string, double>>& values_map); 
+        void UPDATE_byValue(Paths& path, string column_to_search, variant<int32_t, string, double>& value_to_search, map<string, variant<int32_t, string, double>>& values_map); 
+        void print_row_test(vector<Row>& results);
 };
 
