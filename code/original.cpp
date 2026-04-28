@@ -9,6 +9,8 @@
 #include <map>
 
 #include "indexer.h"
+#include "interpreter.h"
+#include "AST.h"
      
 using namespace std;
 namespace fs = std::filesystem;
@@ -1115,89 +1117,6 @@ class Table {
 };
 
 int main() {
-
-    vector<Column> columns = {
-        {DataType::TEXTO, "student_name"},
-        {DataType::INTEIRO, "grade"},
-        {DataType::TEXTO, "dead"},
-        {DataType::REAL, "percentage"}
-        
-    };
-    
-    Table table("Dudes", columns);
-
-    Row add;
-    add.values.push_back("Pippa");
-    add.values.push_back(100);
-    add.values.push_back("yes");
-    add.values.push_back(0.6);
-
-    
-    Row add2;
-    add2.values.push_back("Dude");
-    add2.values.push_back(50);
-    add2.values.push_back("yes");
-    add2.values.push_back(1.5);
-
-    
-    Row add3;
-    add3.values.push_back("Yohan the Butcher");
-    add3.values.push_back(25);
-    add3.values.push_back("yes");
-    add3.values.push_back(0.7);
-
-    
-    Row add4;
-    add4.values.push_back("Kirche");
-    add4.values.push_back(99);
-    add4.values.push_back("yes");
-    add4.values.push_back(6.5);
-    
-    
-    vector<Row> rows2 = { {add, add2, add3, add4} };
-
-    for (auto i: rows2) {
-        table.appendRow(i);
-    }
-
-
-    string col = "student_name";
-    variant<int32_t, string, double> key_to_search = "Yohan the Butcher";
-    variant<int32_t, string, double> key = "Devious little kitten";
-
-    vector<string> columns2 = {{"grade"}, {"student_name"}};
-    map<string, variant<int32_t, string, double>> values = {{"grade", 1000}, {"student_name", "Devious little kitten"}, {"percentage", 30.69}};
-    table.updateRow_byValue(col, key_to_search , values);
-
-    vector<Row> results;
-
-    Row row;
-    table.fetchRow_byValue(col, key, results);
-    results.push_back(row);
-        
-        int count = 0;
-        for (auto row : results) {
-        for (auto item: row.values) {
-                
-            count ++;
-                visit([](const auto& x) {
-                    using T = std::decay_t<decltype(x)>;
-        
-                    if constexpr (std::is_same_v<T, int32_t>) {
-                        //cout << "Type: int" << endl;
-                        cout << "|| " << x << " ||" << endl;
-                    }
-                    else if constexpr (std::is_same_v<T, std::string>) {
-                        //cout << "Type: str" << endl;
-                        cout << "|| " << x << " ||" << endl;
-                    }
-                    else if constexpr (std::is_same_v<T, double>) {
-                        //cout << "Type: str" << endl;
-                        cout << "|| " << x << " ||" << endl;
-                    }
-                }, item);
-            }
-        }
 
     return 0;
 }

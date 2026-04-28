@@ -1,8 +1,44 @@
 #pragma once
-#include <string>
+
 #include <vector>
+#include <cstdint>
+#include <string>
 #include <variant>
 #include <memory>
+
+struct RecordBankHeader {
+    uint32_t MAGIC;
+    uint32_t VERSION;
+    uint32_t ID_INDEX = 0;
+};
+struct IndexHeader {
+    uint32_t MAGIC;
+    uint32_t VERSION;
+    //This also has a dataType assiciated with it.
+};
+struct MetaDataHeader {
+    uint32_t MAGIC;
+    uint32_t VERSION;
+};  
+
+enum class DataType : uint8_t {
+    INT = 1, //int
+    TEXT = 2, //string
+    DOUBLE = 3 //double
+};
+
+struct Column {
+    DataType type;
+    std::string name;  
+};
+struct Row {
+    vector<variant<int32_t, std::string, double>> values;
+};
+
+/* -------------------------------------------------
+ * ------     INTERPRETER CLASSES              -----
+ * -------------------------------------------------*/
+
 enum class TokenType {
     IDENTIFIER,
     NUMBER,
@@ -33,6 +69,9 @@ enum class ConnType {
 struct Token {
     TokenType type;
     string value;
+};
+struct ValueToken : public Token {
+    DataType datatype;
 };
 
 struct Comparison {
@@ -156,14 +195,6 @@ enum class Constraint {
     NOT_NULL,
     PRIMARY_KEY,
     FOREIGN_KEY
-
-};
-
-enum class DataType {
-
-    INT,
-    DOUBLE,
-    TEXT
 
 };
 
