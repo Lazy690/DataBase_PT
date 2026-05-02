@@ -3,15 +3,7 @@
 #include <type_traits>
 using namespace std;
 
-
-
-Indexer::Indexer() {}
-
-struct Indexer::Overflow_Node {
-
-};
-
-bool Indexer::write_offset_pointers(fstream& file, const uint32_t& offset_rb) {
+bool write_offset_pointers(fstream& file, const uint32_t& offset_rb) {
     //Save DataBank offset
     file.write(reinterpret_cast<const char*>(&offset_rb), sizeof(offset_rb));
 
@@ -28,7 +20,7 @@ bool Indexer::write_offset_pointers(fstream& file, const uint32_t& offset_rb) {
     file.seekp(0, ios::beg);
     return file.good();
 }
-bool Indexer::write_overflow_pointer(fstream& file, const uint32_t& offset_rb) {
+bool write_overflow_pointer(fstream& file, const uint32_t& offset_rb) {
     //Save DataBank offset
     file.write(reinterpret_cast<const char*>(&offset_rb), sizeof(offset_rb));
 

@@ -21,7 +21,7 @@ struct MetaDataHeader {
     uint32_t VERSION;
 };  
 
-enum class DataType : uint8_t {
+enum class DataType : uint32_t {
     INT = 1, //int
     TEXT = 2, //string
     DOUBLE = 3 //double
@@ -32,7 +32,8 @@ struct Column {
     std::string name;  
 };
 struct Row {
-    vector<variant<int32_t, std::string, double>> values;
+    using entry = variant<int32_t, std::string, double>; 
+    map<Column, entry> values;
 };
 
 /* -------------------------------------------------

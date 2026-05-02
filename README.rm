@@ -2,9 +2,9 @@
 
 Current Databank file format:                             One Byte
                                                             |                  |---[int payload]
-    [[Magic][Version][Latest ID]] -> [End of row offset][Datatype] ------------|
-            Header = 12 bytes           |                                      |
-            ID at Byte 8.               [So that you know when the row ends]   |---[String len][String payload] 
+    [[Magic][Version][Latest ID]] -> [tumbstone][End of row offset][Datatype] ------------|
+            Header = 12 bytes                    |                                      |
+            ID at Byte 8.                       [So that you know when the row ends]   |---[String len][String payload] 
 
 Current ID index file format:
 

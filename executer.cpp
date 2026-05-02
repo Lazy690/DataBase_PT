@@ -7,31 +7,48 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <cstddef> // for offsetof
+                   //
 #include "executer.h"
 #include "indexer.h"
 #include "classes.h"
 using namespace std;
 namespace fs = std::filesystem;
-Executer::RecordBankHeader DBheader{0x44415441, 2};
-Executer::IndexHeader Iheader{0x44414441, 2};
-Executer::uint32_t hold_row_id = 0;
-Executer::Row hold_for_indexing;
-Executer::uint32_t RecordBank_offset_recording = 0;
+RecordBankHeader DBheader{0x44415441, 2};
+IndexHeader Iheader{0x44414441, 2};
+uint32_t hold_row_id = 0;
+Row hold_for_indexing;
+uint32_t RecordBank_offset_recording = 0;
 
-bool Executer::save_DBheader(ostream& file, const RecordBankHeader& header) {
+enum class status_code{
+    OK,
+    FILE_ERROR,
+    INVALID_HEADER,
+    APPEND_FAILED,
+    P_INDEX_FAILED,
+    S_INDEX_FAILED
+}
+
+struct append_result {
+    bool success;
+    int index = 0;
+    int offset = 0;
+}
+
+bool save_DBheader(ostream& file, const RecordBankHeader& header) {
     file.write(reinterpret_cast<const char*>(&header), sizeof(RecordBankHeader));
     return file.good();
 }
-bool Executer::save_Iheader(ostream& file, const IndexHeader& header, const uint32_t& type) {
+bool save_Iheader(ostream& file, const IndexHeader& header, const uint32_t& type) {
     file.write(reinterpret_cast<const char*>(&header), sizeof(IndexHeader));
     file.write(reinterpret_cast<const char*>(&type), sizeof(type));
     return file.good();
 }
-bool Executer::save_MDheader(ostream& file, const MetaDataHeader& header) {
+bool save_MDheader(ostream& file, const MetaDataHeader& header) {
     file.write(reinterpret_cast<const char*>(&header), sizeof(MetaDataHeader));
     return file.good();
 }
-bool Executer::validate_RecordBank_header(fstream& file) {
+bool validate_RecordBank_header(fstream& file) {
    
     RecordBankHeader header;
     file.read(reinterpret_cast<char*>(&header), sizeof(RecordBankHeader));
@@ -47,7 +64,7 @@ bool Executer::validate_RecordBank_header(fstream& file) {
     file.seekg(0, ios::beg);
     return true;
 }
-bool Executer::validate_Index_header(fstream& file, IndexHeader& validate) {
+bool validate_Index_header(fstream& file, IndexHeader& validate) {
    
     IndexHeader header;
     file.read(reinterpret_cast<char*>(&header), sizeof(IndexHeader));
@@ -66,10 +83,8 @@ bool Executer::validate_Index_header(fstream& file, IndexHeader& validate) {
 //==================================================================
 //====== Index operations ======
 //==================================================================
-bool Executer::save_ID_record(fs::path& path,
-                    const uint32_t& id,
-                    const uint32_t& offset,
-                    const int32_t& overrite_id_offset = -1) {
+bool save_ID_record(fs::path& path, int idndex, int offset,
+                    int overrite_id_offset = -1) {
     fstream file(fs::path(path) / "id.idx", ios::binary | ios::in | ios::out);
     if(!validate_Index_header(file, context.header.index)) {
         cerr << "Invalid file Format." << endl;
@@ -93,7 +108,7 @@ bool Executer::save_ID_record(fs::path& path,
    
     return file.good();
 }
-bool Executer::save_value_index_record(fs::path path,const Row& row, uint32_t& hold_offset) {
+bool save_value_index_record(fs::path path, const Row row, uint32_t hold_offset) {
  
     for(int i = 0; i < int(schema.size()); i++) {
         string file_name = schema[i].name + ".idx";
@@ -136,7 +151,7 @@ bool Executer::save_value_index_record(fs::path path,const Row& row, uint32_t& h
     }
     return true;
 }
-bool Executer::fetch_ID_offset(fstream& file, const int ID, int& fetched_offset) {
+bool fetch_ID_offset(fstream& file, const int ID, int& fetched_offset) {
     if(!validate_Index_header(file)) {
         cerr << "Invalid file Format." << endl;
         return false;
@@ -164,7 +179,7 @@ bool Executer::fetch_ID_offset(fstream& file, const int ID, int& fetched_offset)
    
     return file.good();
 };
-bool Executer::fetch_Value_offset(fstream& file, variant<int32_t, string, double>& value, vector<uint32_t>& fetched_offsets) {
+bool fetch_Value_offset(fstream& file, variant<int32_t, string, double>& value, vector<uint32_t>& fetched_offsets) {
     std::visit([&file, &fetched_offsets, this](const auto& key) {
         using T = std::decay_t<decltype(key)>;
             if constexpr (std::is_same_v<T, int32_t>) {
@@ -180,24 +195,22 @@ bool Executer::fetch_Value_offset(fstream& file, variant<int32_t, string, double
 //==================================================================
 //====== RecordBank operations ======
 //==================================================================
-bool Executer::append(std::fstream& file, const Row& row,
-            uint32_t& hold_id, uint32_t& hold_offset) {
-   
-    // 2 is the index of id index offset in the header struct.
-    // 4 is the size of each value in the header struct, each are 4 bytes wide.
-    int id_index_offset = 2 * 4;
-    uint32_t index = 0;
-    file.seekg(id_index_offset, ios::beg);
+bool append(std::fstream& file, const Row& row) {
+    append_result result;
+
+    index = 0;
+    file.seekg(offsetof(RecordBankHeader, ID_INDEX), std::ios::beg);
     file.read(reinterpret_cast<char*>(&index), sizeof(index));
+
     //reset read cursor:
     file.seekg(0, ios::beg);
-   
+
     index += 1;
-    hold_id = index;
+    append_result.index = index;
     //Move the write cursor to the end of the file to append:
     file.seekp(0, ios::end);
     //Capture the offset of the start of the row were going to save to use in the indexer:
-    hold_offset = file.tellp();
+    append_result.offset = file.tellp();
     //write Tumbstone bytes:
     int32_t tumbstoned = 0;
     file.write(reinterpret_cast<const char*>(&tumbstoned), sizeof(tumbstoned));
@@ -237,12 +250,15 @@ bool Executer::append(std::fstream& file, const Row& row,
     file.write(reinterpret_cast<const char*>(&end_of_row_offset), sizeof(end_of_row_offset));
    
     //Update index counter:
-    file.seekp(id_index_offset, ios::beg);
+    file.seekg(offsetof(RecordBankHeader, ID_INDEX), std::ios::beg);
     file.write(reinterpret_cast<const char*>(&index), sizeof(index));
     file.seekp(0, ios::beg);
-    return file.good();
+
+    if(!file) result.sucess = false;
+    else result.sucess = true;
+    return result;
 }
-bool Executer::fetch(istream& file, Row& row, int fetched_offset = -1) {
+bool fetch(istream& file, Row& row, int fetched_offset = -1) {
     if (fetched_offset != -1) {
         //Now move the read cursor to the offset and get that row.
         file.seekg(fetched_offset, ios::beg);
@@ -303,7 +319,7 @@ bool Executer::fetch(istream& file, Row& row, int fetched_offset = -1) {
     }
     return true;
 }
-bool Executer::deleteRow(fstream& file, int fetched_offset = -1) {
+bool deleteRow(fstream& file, int fetched_offset = -1) {
     file.seekp(fetched_offset, ios::beg);
    
     //change Tumbstone bytes to true:
@@ -315,8 +331,8 @@ bool Executer::deleteRow(fstream& file, int fetched_offset = -1) {
     cout << "Tumbstone value after writting it on delete: " << tumb << endl;
     return file.good();
 }
-bool Executer::append_updated_row(std::fstream& file, const Row& row, int& hold_new_offset,
-                        int old_index) {
+bool append_updated_row(std::fstream& file, const Row& row, int& hold_new_offset,
+                          int old_index) {
     file.seekp(0, ios::end);
     hold_new_offset = file.tellp();
     //write Tumbstone bytes:
@@ -360,35 +376,32 @@ bool Executer::append_updated_row(std::fstream& file, const Row& row, int& hold_
     //deleteRow(file, old_offset);
     return file.good();
 }
-void Executer::INSERT(Paths& path, const Row& row) {
-   
-    fstream RecordBank(context.path.record_bank, ios::binary | ios::in | ios::out);
+status_code INSERT(fs::path path, const Row row) {
+
+    
+    fstream RecordBank(path, ios::binary | ios::in | ios::out);
     if (!RecordBank) {
-        cout << "Failed to Open file when Appending." << endl;
-        return;
+        return status_code::FILE_ERROR;
     }
-    if(!this->validate_RecordBank_header(path.record_bank)) {
-        cout << "Header not validated." << endl;
-        return;
-    }
-    uint32_t hold_id = 0;
-    uint32_t hold_offset = 0;
-    if (!this->append(RecordBank, row, hold_id, hold_offset)) {
-        cout << "Failed to append row." << endl;
-        return;
+
+    if (!validate_RecordBank_header(RecordBank)) 
+        return status_code::INVALID_HEADER;
+    
+    auto result = append(RecordBank, row)
+    if (!resul.sucess) {
+        return status_code::APPEND_FAILED;
     }
     RecordBank.close();
-    if(!this->save_ID_record(hold_id, hold_offset)) {
-        cout << "Failed to Index ID." << endl;
-        return;
+
+    if(!save_ID_record(path, result.index, result.offset)) {
+        return P_INDEX_FAILED;
     }
     if(!this->save_value_index_record(row, hold_offset)) {
-        cerr << "Failed to Index Item" << endl;
-        return;
+        return S_INDEX_FAILED;
     }
    
 }
-void Executer::SELECT_byID(Paths& path, int id, Row& row, bool returns_offset = false, int* returned_offset = 0) {
+void SELECT_byID(Paths& path, int id, Row& row, bool returns_offset = false, int* returned_offset = 0) {
    
     fstream index(fs::path(path.index) / "id.idx", ios::binary | ios::in);
     if(!index) {
@@ -421,7 +434,7 @@ void Executer::SELECT_byID(Paths& path, int id, Row& row, bool returns_offset = 
         return;
     }
 }
-void Executer::SELECT_byValue(Paths& path, string& column, const variant<int32_t, string, double>& value, vector<Row>& results,
+void SELECT_byValue(Paths& path, string& column, const variant<int32_t, string, double>& value, vector<Row>& results,
                       bool returns_offset = false, vector<uint32_t>* returned_offsets = {}) {
    
     string file_name = column + ".idx";
@@ -465,7 +478,7 @@ void Executer::SELECT_byValue(Paths& path, string& column, const variant<int32_t
     RecordBank.close();
     cout << "Results vector before cheking: " << results.size() << endl;
 }
-void Executer::DELETE_byID(Paths& path, const int id) {
+void DELETE_byID(Paths& path, const int id) {
     fstream index(fs::path(path.index) / "id.idx", ios::binary | ios::in);
     if(!index) {
         cerr << "Failed to find ID index file." << endl;
@@ -495,7 +508,7 @@ void Executer::DELETE_byID(Paths& path, const int id) {
     }
     cout << "deleted sucessfully" << endl;
 }
-void Executer::DELETE_byValue(Paths& path, string& column, variant<int32_t, string, double>& value) {
+void DELETE_byValue(Paths& path, string& column, variant<int32_t, string, double>& value) {
     string file_name = column + ".idx";
     fstream index(fs::path(path.index) / file_name, ios::binary | ios::in | ios::out);
     if(!index) {
@@ -529,7 +542,7 @@ void Executer::DELETE_byValue(Paths& path, string& column, variant<int32_t, stri
     }
     RecordBank.close();
 }
-void Executer::UPDATE_byID(Paths& path, int id, map<string, variant<int32_t, string, double>>& values_map) {
+void UPDATE_byID(Paths& path, int id, map<string, variant<int32_t, string, double>>& values_map) {
    
     Row row_to_update;
     int hold_old_offset = 0;
@@ -591,7 +604,7 @@ void Executer::UPDATE_byID(Paths& path, int id, map<string, variant<int32_t, str
         return;
     }
 }
-void Executer::UPDATE_byValue(Paths& path, string column_to_search, variant<int32_t, string, double>& value_to_search,
+void UPDATE_byValue(Paths& path, string column_to_search, variant<int32_t, string, double>& value_to_search,
                         map<string, variant<int32_t, string, double>>& values_map) {
    
     vector<Row> rows_to_update;
@@ -658,7 +671,7 @@ void Executer::UPDATE_byValue(Paths& path, string column_to_search, variant<int3
         }
     }
 }
-void Executer::print_row_test(vector<Row>& results) {
+void print_row_test(vector<Row>& results) {
     int count = 0;
     for (auto row : results) {
     for (auto item: row.values) {
