@@ -47,6 +47,12 @@ DB_Header DBHEADER{0x44415641, 2};
 TB_Header TBHEADER{0x44415441, 3};
 RecordBankHeader RBHEADER{0x44415441, 3};
 
+bool isInVector(const std::string& value, std::vector<std::string> v) {
+    auto it = std::find(v.begin(), v.end(), value);
+    if(it == v.end()) return false;
+    return true;
+}
+
 bool create_DB_metadata(fs::path DBfolder, DB_Header header, std::string dbName) {
     
     std::fstream file((fs::path(DBfolder) / "DBHeaderMeta.bin"), std::ios::binary | std::ios::out);  
@@ -202,6 +208,7 @@ DB_Data load_Database_tableList(std::fstream& file) {
     file.read(reinterpret_cast<char*>(&dbName_len), sizeof(dbName_len));
     dbName.resize(dbName_len);
     file.read(dbName.data(), dbName_len);
+    std::cout << "Database name when lead function: " << dbName << std::endl; 
     if(!file) {
         throw std::runtime_error("Failed to load database name from metadata");
     }
@@ -354,7 +361,9 @@ connection_files CONNECT(std::string input_DBname) {
 bool validate_Table_header(std::fstream& file, std::string TName) {
     return true;
 }
-bool CREATE_TABLE(std::fstream& DB_metadata, fs::path db_path, std::string input_name, bool overrites = true) {
+bool CREATE_TABLE(std::fstream& DB_metadata, std::vector<std::string>& table_list,
+                  fs::path db_path, std::string input_name, bool overrites = true) {
+
     
     fs::path table_path = db_path;
     table_path /= input_name;
@@ -362,14 +371,18 @@ bool CREATE_TABLE(std::fstream& DB_metadata, fs::path db_path, std::string input
 
     if(overrites) {
         fs::create_directory(table_path);
-        add_table_DB_metadata(DB_metadata, input_name);
+        if(!isInVector(input_name, table_list)) {
+            add_table_DB_metadata(DB_metadata, input_name);
+        }
         create_TB_metadata(table_path, TBHEADER, input_name);
         create_recordBank(table_path, RBHEADER);
     } 
     else {
         if(!fs::exists(table_path)){
             fs::create_directory(table_path);
-            add_table_DB_metadata(DB_metadata, input_name);
+            if(!isInVector(input_name, table_list)) {
+                add_table_DB_metadata(DB_metadata, input_name);
+            }
             create_TB_metadata(table_path, TBHEADER, input_name);
             create_recordBank(table_path, RBHEADER);
         }
@@ -388,8 +401,11 @@ int main() {
     }
 
     connection_files files;
+    DB_Data data;
+
     try {
         files = std::move(CONNECT(name));
+        data = load_Database_tableList(files.DB_metadata);
     }
     catch (std::runtime_error e) {
         std::cerr << "Error: " << e.what() << std::endl;
@@ -401,11 +417,11 @@ int main() {
     db_path /= dbName;
     std::string table_name = "dudes";
 
-    if(!CREATE_TABLE(files.DB_metadata, db_path, "dudes")) {
+    if(!CREATE_TABLE(files.DB_metadata, data.table_names, db_path, "dudes")) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
-    if(!CREATE_TABLE(files.DB_metadata, db_path, "Schedule")) {
+    if(!CREATE_TABLE(files.DB_metadata, data.table_names, db_path, "Schedule")) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
