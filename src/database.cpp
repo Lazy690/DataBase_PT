@@ -10,6 +10,7 @@
 #include <map>
 #include <unordered_map>
 #include <cstddef> 
+#include <variant>
 
 namespace fs = std::filesystem;
 
@@ -31,38 +32,74 @@ struct RecordBankHeader {
     uint32_t ID_INDEX = 0;
 };
 
-struct connection_files {
-    std::fstream DB_metadata;
-    //Key is table name for these hash maps
-    std::unordered_map<std::string, std::fstream> table_metadatas;
-    std::unordered_map<std::string, std::fstream> record_banks;
-};
-
-struct DataBase {
-    std::string name;
-    fs::path path;
-    std::vector<std::string> table_names;
-    connection_files files;
-};
-
 enum class DataType : uint32_t {
     INTEIRO = 1, //int
     TEXTO = 2, //string
     REAL = 3 //double
 };
 
-std::fstream file("DB_metadata.bin", std::ios::binary | std::ios::in | std::ios::out);
+struct Constraints_list {
+
+    bool unique = false;
+    bool auto_incriment = false;
+    bool not_null = false;
+    bool primary_key = false;
+    bool foreign_key = false;
+  
+};
+
+struct Column {
+    DataType type;
+    std::string name;
+    Constraints_list constraints;  
+};
+
+struct Row {
+    using entry = std::variant<int32_t, std::string, double>; 
+    std::map<Column, entry> values; 
+};
+
+struct Table {
+    std::string name;
+    std::vector<Column> schema;
+    fs::path path;
+};
+
+struct DataBase {
+    std::string name;
+    fs::path baseDir;
+    std::vector<std::string> table_names;
+    std::vector<fs::path> paths;
+};
+
+
 DB_Header DBHEADER{0x44415641, 2};
 TB_Header TBHEADER{0x44415441, 3};
 RecordBankHeader RBHEADER{0x44415441, 3};
 
+fs::path buildPath(fs::path cwd, std::string table) {
+    cwd /= table;
+    return cwd;
+}
 bool isInVector(const std::string& value, const std::vector<std::string>& v_to_search) {
     const auto& v = v_to_search; 
     auto it = std::find(v.begin(), v.end(), value);
     if(it == v.end()) return false;
     return true;
 }
+bool isInVector(const fs::path& value, const std::vector<fs::path>& v_to_search) {
+    const auto& v = v_to_search; 
+    auto it = std::find(v.begin(), v.end(), value);
+    if(it == v.end()) return false;
+    return true;
+}
 bool eraseVectorEl(const std::string& value, std::vector<std::string>& v_to_delete) {
+    auto& v = v_to_delete;
+    v.erase(std::find(v.begin(), v.end(), value));
+    if(isInVector(value, v)) return false;
+    return true;
+}
+bool eraseVectorEl(const fs::path& value, std::vector<fs::path>& v_to_delete) {
     auto& v = v_to_delete;
     v.erase(std::find(v.begin(), v.end(), value));
     if(isInVector(value, v)) return false;
@@ -144,7 +181,7 @@ bool create_recordBank(fs::path TBfolder, RecordBankHeader RBheader) {
     return true;
 
 }
-bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vector<std::string>& DBtable_names) {
+bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vector<std::string>& table_names) {
     file.flush();
     file.seekg(offsetof(DB_Header, NUM_TABLES), std::ios::beg);
 
@@ -159,12 +196,6 @@ bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vect
     incrimented_tb_count++;
 
     file.clear();
-    file.seekp(offsetof(DB_Header, NUM_TABLES), std::ios::beg);
-    file.write(reinterpret_cast<const char*>(&incrimented_tb_count), sizeof(incrimented_tb_count));
-    if(!file) {
-        std::cerr << "Failed to incriment table counter into database metadata." << std::endl;
-        return false;
-    }
 
     file.seekp(0, std::ios::end);
 
@@ -178,7 +209,16 @@ bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vect
     file.seekg(0, std::ios::beg);
     file.seekp(0, std::ios::beg);
 
-    DBtable_names.push_back(table_name);
+    table_names.push_back(table_name);
+
+    file.seekp(offsetof(DB_Header, NUM_TABLES), std::ios::beg);
+    file.write(reinterpret_cast<const char*>(&incrimented_tb_count), sizeof(incrimented_tb_count));
+    if(!file) {
+        std::cerr << "Failed to incriment table counter into database metadata." << std::endl;
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    file.seekp(0, std::ios::beg);
 
     return true;
 }
@@ -293,36 +333,6 @@ std::fstream openFile(fs::path file_path, std::string name) {
     return file;
 }
 
-std::fstream openTableMetadata(fs::path db_path, std::string name) {
-        
-    fs::path table_path = db_path;
-    table_path /= name;
-
-    std::fstream metadata(fs::path(table_path) / "TBHeaderMeta.bin", std::ios::binary | std::ios::in | std::ios::out);
-    if(!metadata) {
-        throw std::runtime_error("Failed to Open Table metadata");
-    }
-
-    return metadata;
-}
-
-std::fstream openTableRecordBank(fs::path db_path, std::string name) {
-
-    fs::path table_path = db_path;
-    table_path /= name;
-
-    std::fstream record(fs::path(table_path) / "RecordBank.bin", std::ios::binary | std::ios::in | std::ios::out);
-    if(!record) {
-        throw std::runtime_error("Failed to Open RecordBank");
-    }
-
-    return record;
-}
-
-
-bool closeAllFiles(connection_files& files) {
-    return true;
-} 
 bool closeFile(std::fstream& file) {
     file.close();
     return true;
@@ -346,13 +356,13 @@ DataBase CONNECT(std::string input_DBname) {
             throw std::runtime_error("Database does not exists");
         }
         
-        database.path = db_path;
-        database.files.DB_metadata = std::move(openFile(db_path, "DBHeaderMeta.bin"));
+        database.baseDir = db_path;
+        std::fstream metafile = std::move(openFile(db_path, "DBHeaderMeta.bin"));
 
-        if(!validate_Database_header(database.files.DB_metadata)) {
+        if(!validate_Database_header(metafile)) {
             throw std::runtime_error("Invalid metadata file header");
         }
-        std::string name_from_file = get_name_from_DBmetadata(database.files.DB_metadata);
+        std::string name_from_file = get_name_from_DBmetadata(metafile);
 
         if(name_from_file != input_DBname) {
             throw std::runtime_error("Inputed name does not match name on databases metadata file");
@@ -360,11 +370,10 @@ DataBase CONNECT(std::string input_DBname) {
         
         database.name = name_from_file;
 
-        database.table_names = std::move(getTable_names(database.files.DB_metadata));
+        database.table_names = std::move(getTable_names(metafile));
 
         for (auto name : database.table_names) {
-            database.files.table_metadatas[name] = std::move(openTableMetadata(db_path, name));
-            database.files.record_banks[name] = std::move(openTableRecordBank(db_path, name));
+            database.paths.push_back(buildPath(database.baseDir, name));
         }
 
     }
@@ -378,18 +387,16 @@ DataBase CONNECT(std::string input_DBname) {
 bool validate_Table_header(std::fstream& file, std::string TName) {
     return true;
 }
-bool CREATE_TABLE(std::fstream& DB_metadata, std::vector<std::string>& table_list,
-                  fs::path db_path, std::string input_name, bool overrites = true) {
+bool CREATE_TABLE(DataBase& database, std::string input_name, bool overrites = true) {
 
-    
-    fs::path table_path = db_path;
-    table_path /= input_name;
-    
+    fs::path table_path = buildPath(database.baseDir, input_name);
 
     if(overrites) {
         fs::create_directory(table_path);
-        if(!isInVector(input_name, table_list)) {
-            add_table_DB_metadata(DB_metadata, input_name, table_list);
+        if(!isInVector(input_name, database.table_names)) {
+            std::fstream metafile(fs::path(database.baseDir) / "DBHeaderMeta.bin", std::ios::binary | std::ios::in | std::ios::out);
+            add_table_DB_metadata(metafile, input_name, database.table_names);
+            metafile.close();
         }
         create_TB_metadata(table_path, TBHEADER, input_name);
         create_recordBank(table_path, RBHEADER);
@@ -397,8 +404,10 @@ bool CREATE_TABLE(std::fstream& DB_metadata, std::vector<std::string>& table_lis
     else {
         if(!fs::exists(table_path)){
             fs::create_directory(table_path);
-            if(!isInVector(input_name, table_list)) {
-                add_table_DB_metadata(DB_metadata, input_name, table_list);
+            if(!isInVector(input_name, database.table_names)) {
+                std::fstream metafile(fs::path(database.baseDir) / "DBHeaderMeta.bin", std::ios::binary | std::ios::in | std::ios::out);
+                add_table_DB_metadata(metafile, input_name, database.table_names);
+                metafile.close();
             }
             create_TB_metadata(table_path, TBHEADER, input_name);
             create_recordBank(table_path, RBHEADER);
@@ -414,24 +423,25 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
     }
 
     std::vector<std::string> table_namescp = database.table_names;
+    std::vector<fs::path>    table_pathscp = database.paths;
 
     if(!eraseVectorEl(table_name, table_namescp)) {
         std::cerr << "Failed to erase table name from tb name list" << std::endl;
         return false;
     }
 
-    if(!create_DB_metadata(database.path, DBHEADER, database.name, "temp.bin")){
+    if(!create_DB_metadata(database.baseDir, DBHEADER, database.name, "temp.bin")){
         std::cerr << "Failed to create temp.bin when rewritting DB metadata" << std::endl;
-        fs::remove_all(fs::path(database.path) / "temp.bin");
+        fs::remove_all(fs::path(database.baseDir) / "temp.bin");
         return false;
     }
 
-    std::fstream temp(fs::path(database.path) / "temp.bin", std::ios::binary | std::ios::in | std::ios::out);
+    std::fstream temp(fs::path(database.baseDir) / "temp.bin", std::ios::binary | std::ios::in | std::ios::out);
 
     if(!temp) {
         std::cout << "Failed to create temp file when dropping table" << std::endl;
         temp.close();
-        fs::remove_all(fs::path(database.path) / "temp.bin");
+        fs::remove_all(fs::path(database.baseDir) / "temp.bin");
         return false;
     }
 
@@ -440,36 +450,22 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
         if(!add_table_DB_metadata(temp, name, database.table_names)){
             std::cerr << "Failed to add table name: " << name << " to temp metadata" << std::endl;
             temp.close();
-            fs::remove_all(fs::path(database.path) / "temp.bin");
+            fs::remove_all(fs::path(database.baseDir) / "temp.bin");
             return false;
         }
     }
-      
-    std::fstream old_metadata = std::move(database.files.DB_metadata);
-
-    database.files.DB_metadata = std::move(temp);
-  
-    if(!database.files.DB_metadata) {
-        std::cerr << "Failed to move temp file to database files" << std::endl;
-        database.files.DB_metadata.close();
-        database.files.DB_metadata = std::move(old_metadata);
-        fs::remove_all(fs::path(database.path) / "temp.bin");
-        return false;
-    }
-
-    old_metadata.close();
-    database.files.table_metadatas[table_name].close();
-    database.files.record_banks[table_name].close();
-
-    fs::remove_all(fs::path(database.path) / "DBHeaderMeta.bin");
-    fs::remove_all(fs::path(database.path) / table_name);
+    fs::remove_all(fs::path(database.baseDir) / "DBHeaderMeta.bin");
+    fs::remove_all(fs::path(database.baseDir) / table_name);
     
-    if(!eraseVectorEl(table_name, database.table_names)) {
-        std::cerr << "Failed to erase table name from tb name list" << std::endl;
-        return false;
-    }
+    auto table_path = buildPath(database.baseDir, table_name);
 
-    fs::rename(fs::path(database.path) / "temp.bin", fs::path(database.path) / "DBHeaderMeta.bin");
+    fs::rename(fs::path(database.baseDir) / "temp.bin", fs::path(database.baseDir) / "DBHeaderMeta.bin");
+
+    database.table_names = {};
+    database.paths       = {};
+
+    database.table_names = table_namescp;
+    database.paths       = table_pathscp;
 
     return true;
 }
@@ -496,11 +492,11 @@ int main() {
     db_path /= dbName;
     std::string table_name = "dudes";
 
-    if(!CREATE_TABLE(database.files.DB_metadata, database.table_names, db_path, "dudes")) {
+    if(!CREATE_TABLE(database, "dudes")) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
-    if(!CREATE_TABLE(database.files.DB_metadata, database.table_names, db_path, "Schedule")) {
+    if(!CREATE_TABLE(database, "Schedule")) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
