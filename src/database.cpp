@@ -123,68 +123,54 @@ std::fstream openFile(fs::path file_path, std::string name) {
     return file;
 }
 
-template<typename HeaderType>
-bool flush_header(std::fstream& file, HeaderType header) {
-    file.write(reinterpret_cast<const char*>(&header), sizeof(HeaderType));
+bool add_column_TB_metadata(std::fstream& file, const Column& column) {
+    file.flush();
+    file.seekg(offsetof(TB_Header, NUM_COLUMNS), std::ios::beg);
+
+    uint32_t current_col_count = 0;
+    file.read(reinterpret_cast<char*>(&current_col_count), sizeof(current_col_count));
     if(!file) {
-        std::cerr << "Failed to write header" << std::endl;
+        std::cerr << "Failed to load column counter from table metadata." << std::endl;
         return false;
     }
-    return true;
-}
-template<typename HeaderType>
-bool create_metadata_file(fs::path dir, HeaderType header, std::string name, std::string filename = "") {
-    
-    if(filename.empty()) { 
-        if constexpr (std::is_same_v<HeaderType, DB_Header>) {
-            std::cout << "Caught\n";
-            filename = "DBMetadata.bin";
-        }
-        else if constexpr (std::is_same_v<HeaderType, TB_Header>) {
-            filename = "TBMetadata.bin";
-        }
-    }
-    
-    std::cout << filename << "\n";
-    std::fstream file(fs::path(dir) / filename, std::ios::binary | std::ios::out | std::ios::trunc);
+    uint32_t incrimented_col_count = current_col_count;
+    incrimented_col_count++;
 
+    file.seekg(0, std::ios::beg);
+    file.seekp(0, std::ios::end);
+
+    file.write(reinterpret_cast<const char*>(&column.type), sizeof(column.type));
     if(!file) {
-        std::cerr << "Failed to create metadata file" << std::endl;
+        std::cerr << "Failed to incriment column type into table metadata." << std::endl;
         return false;
     }
 
-    if(!flush_header<HeaderType>(file, header)) {
-        std::cerr << "Failed to flush header into metadata file" << std::endl;
-        return false;
-    };
-
-    uint32_t len = name.size();
+    uint32_t len = column.name.size();
     file.write(reinterpret_cast<const char*>(&len), sizeof(len));
-    file.write(name.data(), len);
+    file.write(column.name.data(), len);
     if(!file) {
-        std::cerr << "Failed to save name to header file" << std::endl;
+        std::cerr << "Failed to add new column name into table metadata." << std::endl;
         return false;
     }
+
+    file.write(reinterpret_cast<const char*>(&column.constraints), sizeof(Constraints_list));
+    if(!file) {
+        std::cerr << "Failed to save column constraints into metadata." << std::endl;
+        return false;
+    }
+
+    file.seekp(offsetof(TB_Header, NUM_COLUMNS), std::ios::beg);
+    file.write(reinterpret_cast<const char*>(&incrimented_col_count), sizeof(incrimented_col_count));
+    if(!file) {
+        std::cerr << "Failed to incriment column counter into table metadata." << std::endl;
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    file.seekp(0, std::ios::beg);
+
     return true;
 }
-
-bool create_data_binary(fs::path dir, RecordBankHeader header) {
-
-    std::fstream file((fs::path(dir) / "data.bin"), std::ios::binary | std::ios::out);  
-
-    if(!file) {
-        std::cerr << "Failed to create Record Bank." << std::endl;
-        return false;
-    }
-
-    if(!flush_header(file, header)) {
-        std::cerr << "Failed to flush header into records.dat" << std::endl;
-        return false;
-    }
-    return true;
-}
-
-bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vector<std::string>& table_names) {
+bool add_table_DB_metadata(std::fstream& file, std::string table_name) {
     file.flush();
     file.seekg(offsetof(DB_Header, NUM_TABLES), std::ios::beg);
 
@@ -212,7 +198,6 @@ bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vect
     file.seekg(0, std::ios::beg);
     file.seekp(0, std::ios::beg);
 
-    table_names.push_back(table_name);
 
     file.seekp(offsetof(DB_Header, NUM_TABLES), std::ios::beg);
     file.write(reinterpret_cast<const char*>(&incrimented_tb_count), sizeof(incrimented_tb_count));
@@ -226,30 +211,97 @@ bool add_table_DB_metadata(std::fstream& file, std::string table_name, std::vect
     return true;
 }
 
-bool validate_Database_header(std::fstream& file) {
-
-    file.clear();
-    file.seekg(0, std::ios::beg);
-
-    DB_Header this_Header;
-
-    file.read(reinterpret_cast<char*>(&this_Header), sizeof(DB_Header));
-
+template<typename HeaderType>
+bool flush_header(std::fstream& file, HeaderType header) {
+    file.write(reinterpret_cast<const char*>(&header), sizeof(HeaderType));
     if(!file) {
-        std::cerr << "Failed to load database metadata" << std::endl;
-        return false;
-    }
-
-    if(this_Header.MAGIC != DBHEADER.MAGIC) {
-        std::cerr << "Database has invalid MAGIC" << std::endl;
-        return false;
-    }
-    if(this_Header.VERSION != DBHEADER.VERSION) {
-        std::cerr << "Database has invalid file VERSION" << std::endl;
+        std::cerr << "Failed to write header" << std::endl;
         return false;
     }
     return true;
 }
+template<typename HeaderType>
+bool create_metadata_file(fs::path dir, HeaderType header, std::string name, std::string filename = "") {
+    
+    if(filename.empty()) { 
+        if constexpr (std::is_same_v<HeaderType, DB_Header>) {
+            filename = "DBMetadata.bin";
+        }
+        else if constexpr (std::is_same_v<HeaderType, TB_Header>) {
+            filename = "TBMetadata.bin";
+        }
+        else {
+            std::cerr << "Invalid header type detected" << std::endl;
+            return false;
+        }
+    }
+    
+    std::cout << filename << "\n";
+    std::fstream file(fs::path(dir) / filename, std::ios::binary | std::ios::out | std::ios::trunc);
+
+    if(!file) {
+        std::cerr << "Failed to create metadata file" << std::endl;
+        return false;
+    }
+
+    if(!flush_header<HeaderType>(file, header)) {
+        std::cerr << "Failed to flush header into metadata file" << std::endl;
+        return false;
+    };
+
+    uint32_t len = name.size();
+    file.write(reinterpret_cast<const char*>(&len), sizeof(len));
+    file.write(name.data(), len);
+    if(!file) {
+        std::cerr << "Failed to save name to header file" << std::endl;
+        return false;
+    }
+
+
+    return true;
+}
+
+template<typename HeaderType>
+bool validate_file_header(std::fstream& file, HeaderType header) {
+
+    file.clear();
+    file.seekg(0, std::ios::beg);
+
+    HeaderType this_Header;
+
+    file.read(reinterpret_cast<char*>(&this_Header), sizeof(HeaderType));
+
+    if(!file) {
+        std::cerr << "Failed to load file header" << std::endl;
+        return false;
+    }
+
+    if(this_Header.MAGIC != header.MAGIC) {
+        std::cerr << "File has invalid MAGIC" << std::endl;
+        return false;
+    }
+    if(this_Header.VERSION != header.VERSION) {
+        std::cerr << "File has invalid file VERSION" << std::endl;
+        return false;
+    }
+    return true;
+}
+bool create_data_binary(fs::path dir, RecordBankHeader header) {
+
+    std::fstream file((fs::path(dir) / "data.bin"), std::ios::binary | std::ios::out);  
+
+    if(!file) {
+        std::cerr << "Failed to create Record Bank." << std::endl;
+        return false;
+    }
+
+    if(!flush_header(file, header)) {
+        std::cerr << "Failed to flush header into records.dat" << std::endl;
+        return false;
+    }
+    return true;
+}
+
 
 std::string get_name_from_DBmetadata(std::fstream& file) {
     //always assumes the name will be right after header
@@ -352,7 +404,7 @@ DataBase CONNECT(std::string input_DBname) {
         database.baseDir = db_path;
         std::fstream metafile = std::move(openFile(db_path, "DBMetadata.bin"));
 
-        if(!validate_Database_header(metafile)) {
+        if(!validate_file_header(metafile, DBHEADER)) {
             throw std::runtime_error("Invalid metadata file header");
         }
         std::string name_from_file = get_name_from_DBmetadata(metafile);
@@ -378,10 +430,7 @@ DataBase CONNECT(std::string input_DBname) {
     return database;
 }
 
-bool validate_Table_header(std::fstream& file, std::string TName) {
-    return true;
-}
-bool CREATE_TABLE(DataBase& database, std::string input_name, bool overrites = true) {
+bool CREATE_TABLE(DataBase& database, std::string input_name, std::vector<Column> columns, bool overrites = true) {
     
     fs::path table_path = buildPath(database.baseDir, input_name);
     
@@ -391,9 +440,12 @@ bool CREATE_TABLE(DataBase& database, std::string input_name, bool overrites = t
 
     std::fstream metafile = std::move(openFile(database.baseDir, "DBMetadata.bin"));
 
-    if(!add_table_DB_metadata(metafile, input_name, database.table_names)) {
+    if(!add_table_DB_metadata(metafile, input_name)) {
         return false;
     };
+
+    database.table_names.push_back(input_name);
+
     metafile.close();
     
     if(!create_metadata_file<TB_Header>(table_path, TBHEADER, input_name)){
@@ -403,6 +455,18 @@ bool CREATE_TABLE(DataBase& database, std::string input_name, bool overrites = t
         return false;
     };
     
+    if (columns.empty()) return true;
+
+    std::fstream file = std::move(openFile(table_path, "TBMetadata.bin"));
+
+    for (auto& col : columns) {
+        if(!add_column_TB_metadata(file, col)) {
+            std::cerr << "Failed to flush a column into table metadata" << std::endl;
+            return false;
+        };
+    }
+    file.close();
+
     return true;
 }
 bool DROP_TABLE(DataBase& database, std::string table_name) {
@@ -437,7 +501,7 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
 
 
     for(const auto& name : table_namescp) {
-        if(!add_table_DB_metadata(temp, name, database.table_names)){
+        if(!add_table_DB_metadata(temp, name)){
             std::cerr << "Failed to add table name: " << name << " to temp metadata" << std::endl;
             temp.close();
             fs::remove_all(fs::path(database.baseDir) / "temp.bin");
@@ -460,8 +524,6 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
 int main() {
 
     std::string name = "WorkSpace";
-    int step = 0;
-    std::cout << ++step << '\n';
 
     if(!CREATE_DATABASE("WorkSpace")) {
         std::cerr << "CREATE DATABASE command failed to execute." << std::endl;
@@ -470,7 +532,6 @@ int main() {
 
     DataBase database;
     
-    std::cout << ++step << '\n';
     try {
         database = std::move(CONNECT(name));
     }
@@ -478,23 +539,27 @@ int main() {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
-    std::string dbName = name + "_DB";
-    fs::path db_path = "..";
-    db_path /= ".."; 
-    db_path /= dbName;
-    std::string table_name = "dudes";
     
-    std::cout << ++step << '\n';
-    if(!CREATE_TABLE(database, "dudes")) {
+    std::vector<Column> a = {{
+                             {DataType::INTEIRO, "id", {true, true, true, true, false}}, 
+                             {DataType::TEXTO, "name", {}}, 
+                             {DataType::REAL, "grade", {}}
+                            }};
+
+    std::vector<Column> b = {{
+                             {DataType::INTEIRO, "id", {true, true, true, true, false}},
+                             {DataType::TEXTO, "Weekday", {}}, 
+                             {DataType::INTEIRO, "isManditory", {}}
+                            }};
+
+    if(!CREATE_TABLE(database, "dudes", a)) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
-    std::cout << ++step << '\n';
-    if(!CREATE_TABLE(database, "Schedule")) {
+    if(!CREATE_TABLE(database, "Schedule", b)) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
-    std::cout << ++step << '\n';
     if(!DROP_TABLE(database, "dudes")) { 
         std::cerr << "DROP TABLE command failed to execute." << std::endl;
         return 1;
