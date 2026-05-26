@@ -54,9 +54,9 @@ struct Column {
     Constraints_list constraints;  
 };
 
-struct Row {
+struct Row { 
     using entry = std::variant<int32_t, std::string, double>; 
-    std::map<Column, entry> values; 
+    std::vector<entry> values; 
 };
 
 struct Table {
