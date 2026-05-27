@@ -28,6 +28,30 @@ struct Row {
     bool tumpstoned = false;
     uint32_t sizeOfRow = 0;
     std::vector<Entry> values = {};
+    
+    void add_entry(DataType t, std::variant<int32_t, std::string, double> v) {
+        // note: don't add sizeof(t) here because we store type as uint32_t in serialization
+        if      (t == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
+        else if (t == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(v).size());
+        else if (t == DataType::REAL)    sizeOfRow += sizeof(double);
+
+        // add space for the type tag (we use uint32_t)
+        sizeOfRow += sizeof(uint32_t);
+
+        values.push_back({t, v});
+    };
+    void add_entry(Entry& entry) {
+        if      (entry.type == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
+        else if (entry.type == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
+        else if (entry.type == DataType::REAL)    sizeOfRow += sizeof(double);
+
+        sizeOfRow += sizeof(uint32_t);
+        values.push_back(entry);
+    };
+        
+    std::vector<Entry> getValues() {
+        return this->values;
+    }
 };
 
 struct RecordHeader {
@@ -49,8 +73,6 @@ struct Page {
     Page() : buffer(PAGE_SIZE) {}
 };
 
-
-
 Page create_page(uint32_t id) {
     PageHeader newHeader = {id, 0, 0};
     Page newPage;
@@ -61,35 +83,33 @@ Page create_page(uint32_t id) {
 std::vector<char> serializeRow(Row& row) {
 
     std::vector<char> bytes;
-    
-    const char* tumpstoned_byte = reinterpret_cast<const char*>(&row.tumpstoned);
-    const char* sizeOfRow_byte  = reinterpret_cast<const char*>(&row.sizeOfRow);
-    bytes.insert(bytes.end(), tumpstoned_byte, tumpstoned_byte + sizeof(tumpstoned_byte));
-    bytes.insert(bytes.end(), sizeOfRow_byte, sizeOfRow_byte + sizeof(sizeOfRow_byte));
+    bytes.reserve(64 + row.sizeOfRow);
 
-    for (auto& entry : row.values) {
-        
-        const char* type_byte = reinterpret_cast<const char*>(&entry.type);
-        bytes.insert(bytes.end(), type_byte, type_byte + sizeof(type_byte));
+    // serialize tombstone as uint8_t
+    uint8_t tomb = row.tumpstoned ? 1 : 0;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&tomb), reinterpret_cast<const char*>(&tomb) + sizeof(tomb));
+
+    // write sizeOfRow (uint32_t) immediately
+    uint32_t rowSize = row.sizeOfRow;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&rowSize), reinterpret_cast<const char*>(&rowSize) + sizeof(rowSize));
+
+    for (auto& entry : row.getValues()) {
+        uint32_t type_u = static_cast<uint32_t>(entry.type);
+        bytes.insert(bytes.end(), reinterpret_cast<const char*>(&type_u), reinterpret_cast<const char*>(&type_u) + sizeof(type_u));
           
         if(entry.type == DataType::INTEIRO) {
             const int32_t integer = std::get<int32_t>(entry.value);
-            const char* integer_byte = reinterpret_cast<const char*>(&integer);
-            bytes.insert(bytes.end(), integer_byte, integer_byte + sizeof(integer_byte));
+            bytes.insert(bytes.end(), reinterpret_cast<const char*>(&integer), reinterpret_cast<const char*>(&integer) + sizeof(integer));
         }
-        if(entry.type == DataType::TEXTO) {
-            const std::string str = std::get<std::string>(entry.value);
-            const uint32_t len = str.size();
-
-            const char* len_byte = reinterpret_cast<const char*>(&len_byte);
-
-            bytes.insert(bytes.end(), len_byte, len_byte + sizeof(len_byte));
+        else if(entry.type == DataType::TEXTO) {
+            const std::string& str = std::get<std::string>(entry.value);
+            const uint32_t len = static_cast<uint32_t>(str.size());
+            bytes.insert(bytes.end(), reinterpret_cast<const char*>(&len), reinterpret_cast<const char*>(&len) + sizeof(len));
             bytes.insert(bytes.end(), str.begin(), str.end());
         }
-        if(entry.type == DataType::REAL) {
+        else if(entry.type == DataType::REAL) {
             const double dub = std::get<double>(entry.value);
-            const char* dub_byte = reinterpret_cast<const char*>(&dub);
-            bytes.insert(bytes.end(), dub_byte, dub_byte + sizeof(dub_byte));
+            bytes.insert(bytes.end(), reinterpret_cast<const char*>(&dub), reinterpret_cast<const char*>(&dub) + sizeof(dub));
         }
     }
 
@@ -97,17 +117,22 @@ std::vector<char> serializeRow(Row& row) {
 }
 
 template<typename T>
-std::optional<T> read_bytes(std::vector<char>& buff, std::size_t index, std::optional<uint32_t> str_len = std::nullopt) {
-    if(index + sizeof(T) > buff.size()) return std::nullopt; 
-
-    T value;
+std::optional<T> read_bytes(std::vector<char>& buff, std::size_t& index, std::optional<uint32_t> str_len = std::nullopt) {
     if constexpr (std::is_same_v<T, std::string>) {
         if(str_len == std::nullopt) return std::nullopt;
+        if(index + *str_len > buff.size()) return std::nullopt;
+        T value;
         value.resize(*str_len);
+        std::memcpy(value.data(), buff.data() + index, *str_len);
+        index += *str_len;
+        return value;
+    } else {
+        if(index + sizeof(T) > buff.size()) return std::nullopt; 
+        T value;
+        std::memcpy(&value, buff.data() + index, sizeof(T));
+        index += sizeof(T);
+        return value;
     }
-    std::memcpy(&value, buff.data() + index, sizeof(T));
-    index += sizeof(T);
-    return value;
 }
 
 std::optional<Row>
@@ -115,11 +140,11 @@ deserializeRow(std::vector<char>& rowBytes) {
     Row row;
     std::size_t index = 0;
 
-    std::optional<bool> tumpstoned = read_bytes<bool>(rowBytes, index);
-    if(tumpstoned == std::nullopt) {
-        std::cerr << "index went over the buffer size" << std::endl;
-        return std::nullopt;
-    } 
+    // read tombstone (uint8_t)
+    auto tomb_u = read_bytes<uint8_t>(rowBytes, index);
+    if(!tomb_u) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
+    row.tumpstoned = (*tomb_u != 0);
+
     std::optional<uint32_t> sizeOfRow = read_bytes<uint32_t>(rowBytes, index);
     if(!sizeOfRow) {
         std::cerr << "index went over the buffer size" << std::endl;
@@ -127,60 +152,45 @@ deserializeRow(std::vector<char>& rowBytes) {
     }
 
     std::vector<Entry> entries;
+    std::size_t end = index + *sizeOfRow;
 
-    while (index < (index + *sizeOfRow)) {
+    while (index < end) {
+        // read type as uint32_t then cast
+        auto type_u = read_bytes<uint32_t>(rowBytes, index);
+        if(!type_u) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
+        DataType dtype = static_cast<DataType>(*type_u);
+
         Entry entry;
-        std::optional<DataType> type = read_bytes<DataType>(rowBytes, index);
-        if(!type) {
-            std::cerr << "index went over the buffer size" << std::endl;
-            return std::nullopt;
-        }
-
-        entry.type = *type;
-
-        std::optional<int32_t>     integer;
-        std::optional<double>      dub;
-        std::optional<uint32_t>    str_len;
-        std::optional<std::string> str;
+        entry.type = dtype;
 
         switch (entry.type) {
-            case DataType::INTEIRO:
-                integer = read_bytes<int32_t>(rowBytes, index);
-                if(!integer) {
-                    std::cerr << "index went over the buffer size" << std::endl;
-                    return std::nullopt;
-                }
+            case DataType::INTEIRO: {
+                auto integer = read_bytes<int32_t>(rowBytes, index);
+                if(!integer) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
                 entry.value = *integer;
                 break;
-            case DataType::REAL:
-                dub     = read_bytes<double>(rowBytes, index);
-                if(!dub) {
-                    std::cerr << "index went over the buffer size" << std::endl;
-                    return std::nullopt;
-                }
+            }
+            case DataType::REAL: {
+                auto dub = read_bytes<double>(rowBytes, index);
+                if(!dub) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
                 entry.value = *dub;
                 break;
-            case DataType::TEXTO:
-                str_len = read_bytes<uint32_t>(rowBytes, index);
-                if(!str_len) {
-                    std::cerr << "index went over the buffer size or string len was null" << std::endl;
-                    return std::nullopt;
-                }
-                str     = read_bytes<std::string>(rowBytes, index, str_len);
-                if(!str) {
-                    std::cerr << "index went over the buffer size" << std::endl;
-                    return std::nullopt;
-                }
+            }
+            case DataType::TEXTO: {
+                auto str_len = read_bytes<uint32_t>(rowBytes, index);
+                if(!str_len) { std::cerr << "index went over the buffer size or string len was null\n"; return std::nullopt; }
+                auto str = read_bytes<std::string>(rowBytes, index, str_len);
+                if(!str) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
                 entry.value = *str;
+                break;
+            }
         }
 
-        entries.push_back(entry);
-
+        entries.push_back(std::move(entry));
     }
     
-    row.tumpstoned = *tumpstoned;
     row.sizeOfRow  = *sizeOfRow;
-    row.values     = entries;
+    row.values     = std::move(entries);
 
     return row;
 }
@@ -216,6 +226,29 @@ load_page(std::fstream& file, const int id) {
     return page;
 }
 
+void printRow(Row& row) {
+    std::cout << "tumpstoned: " << row.tumpstoned << "\n";
+    std::cout << "row size:   " << row.sizeOfRow  << "\n";
+    std::cout << "Entries: \n";
+    for (auto& entry : row.values) {
+        switch (entry.type) {
+            case DataType::INTEIRO:
+                std::cout << "Data Type: INTEIRO" << "\n";
+                std::cout << "Value: " << std::get<int32_t>(entry.value) << "\n";
+                break;
+            case DataType::REAL:
+                std::cout << "Data Type: REAL" << "\n";
+                std::cout << "Value: " << std::get<double>(entry.value) << "\n";
+                break;
+            case DataType::TEXTO:
+                std::cout << "Data Type: TEXTO" << "\n";
+                std::cout << "Value: " << std::get<std::string>(entry.value) << "\n";
+                break;
+        }
+    }
+    std::cout << "------------------\n";
+}
+
 bool flush_page(std::fstream& file, const Page& page) {
     
     int pageOffset = sizeof(RecordHeader) + (PAGE_SIZE * page.header.id);
@@ -249,5 +282,25 @@ bool INSERT(Page& page, const Row& row) {
 }
 
 int main() {
+    Entry entry01{static_cast<DataType>(1), 26};
+    Entry entry02{static_cast<DataType>(2), "Monday"};
+    Entry entry03{static_cast<DataType>(3), 20.4};
+    Row row;
 
+    row.add_entry(static_cast<DataType>(1), 26);
+    row.add_entry(static_cast<DataType>(2), "Monday");
+    row.add_entry(static_cast<DataType>(3), 20.4);
+
+    std::vector<char> bytes = serializeRow(row);
+    std::cout << "Size of bytes: " << bytes.size() << "\n";
+    std::cout << "Size of row: " << sizeof(row) << "\n";
+    std::ofstream file("file.bin", std::ios::binary | std::ios::trunc);
+    file.write(bytes.data(), bytes.size());
+    file.close();
+    std::optional<Row> deRow = deserializeRow(bytes);
+    if(!deRow) {
+        std::cerr << "Failed to deserialize Row \n";
+        return 1;
+    }
+    printRow(*deRow);
 }
