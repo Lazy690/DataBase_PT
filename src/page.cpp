@@ -8,6 +8,7 @@
 #include <cassert>
 #include <variant>
 #include <vector>
+#include <cstring>
 
 const int KILOBYTE = 1024;
 constexpr int PAGE_SIZE = KILOBYTE; 
@@ -93,6 +94,95 @@ std::vector<char> serializeRow(Row& row) {
     }
 
     return bytes;
+}
+
+template<typename T>
+std::optional<T> read_bytes(std::vector<char>& buff, std::size_t index, std::optional<uint32_t> str_len = std::nullopt) {
+    if(index + sizeof(T) > buff.size()) return std::nullopt; 
+
+    T value;
+    if constexpr (std::is_same_v<T, std::string>) {
+        if(str_len == std::nullopt) return std::nullopt;
+        value.resize(*str_len);
+    }
+    std::memcpy(&value, buff.data() + index, sizeof(T));
+    index += sizeof(T);
+    return value;
+}
+
+std::optional<Row>
+deserializeRow(std::vector<char>& rowBytes) {
+    Row row;
+    std::size_t index = 0;
+
+    std::optional<bool> tumpstoned = read_bytes<bool>(rowBytes, index);
+    if(tumpstoned == std::nullopt) {
+        std::cerr << "index went over the buffer size" << std::endl;
+        return std::nullopt;
+    } 
+    std::optional<uint32_t> sizeOfRow = read_bytes<uint32_t>(rowBytes, index);
+    if(!sizeOfRow) {
+        std::cerr << "index went over the buffer size" << std::endl;
+        return std::nullopt;
+    }
+
+    std::vector<Entry> entries;
+
+    while (index < (index + *sizeOfRow)) {
+        Entry entry;
+        std::optional<DataType> type = read_bytes<DataType>(rowBytes, index);
+        if(!type) {
+            std::cerr << "index went over the buffer size" << std::endl;
+            return std::nullopt;
+        }
+
+        entry.type = *type;
+
+        std::optional<int32_t>     integer;
+        std::optional<double>      dub;
+        std::optional<uint32_t>    str_len;
+        std::optional<std::string> str;
+
+        switch (entry.type) {
+            case DataType::INTEIRO:
+                integer = read_bytes<int32_t>(rowBytes, index);
+                if(!integer) {
+                    std::cerr << "index went over the buffer size" << std::endl;
+                    return std::nullopt;
+                }
+                entry.value = *integer;
+                break;
+            case DataType::REAL:
+                dub     = read_bytes<double>(rowBytes, index);
+                if(!dub) {
+                    std::cerr << "index went over the buffer size" << std::endl;
+                    return std::nullopt;
+                }
+                entry.value = *dub;
+                break;
+            case DataType::TEXTO:
+                str_len = read_bytes<uint32_t>(rowBytes, index);
+                if(!str_len) {
+                    std::cerr << "index went over the buffer size or string len was null" << std::endl;
+                    return std::nullopt;
+                }
+                str     = read_bytes<std::string>(rowBytes, index, str_len);
+                if(!str) {
+                    std::cerr << "index went over the buffer size" << std::endl;
+                    return std::nullopt;
+                }
+                entry.value = *str;
+        }
+
+        entries.push_back(entry);
+
+    }
+    
+    row.tumpstoned = *tumpstoned;
+    row.sizeOfRow  = *sizeOfRow;
+    row.values     = entries;
+
+    return row;
 }
 
 std::optional<Page>
