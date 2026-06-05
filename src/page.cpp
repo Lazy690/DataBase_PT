@@ -30,14 +30,11 @@ struct Row {
     std::vector<Entry> values = {};
     
     void add_entry(DataType t, std::variant<int32_t, std::string, double> v) {
-        // note: don't add sizeof(t) here because we store type as uint32_t in serialization
         if      (t == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
         else if (t == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(v).size());
         else if (t == DataType::REAL)    sizeOfRow += sizeof(double);
 
-        // add space for the type tag (we use uint32_t)
         sizeOfRow += sizeof(uint32_t);
-
         values.push_back({t, v});
     };
     void add_entry(Entry& entry) {
@@ -85,11 +82,9 @@ std::vector<char> serializeRow(Row& row) {
     std::vector<char> bytes;
     bytes.reserve(64 + row.sizeOfRow);
 
-    // serialize tombstone as uint8_t
     uint8_t tomb = row.tumpstoned ? 1 : 0;
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&tomb), reinterpret_cast<const char*>(&tomb) + sizeof(tomb));
 
-    // write sizeOfRow (uint32_t) immediately
     uint32_t rowSize = row.sizeOfRow;
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&rowSize), reinterpret_cast<const char*>(&rowSize) + sizeof(rowSize));
 
@@ -140,7 +135,6 @@ deserializeRow(std::vector<char>& rowBytes) {
     Row row;
     std::size_t index = 0;
 
-    // read tombstone (uint8_t)
     auto tomb_u = read_bytes<uint8_t>(rowBytes, index);
     if(!tomb_u) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
     row.tumpstoned = (*tomb_u != 0);
@@ -155,7 +149,6 @@ deserializeRow(std::vector<char>& rowBytes) {
     std::size_t end = index + *sizeOfRow;
 
     while (index < end) {
-        // read type as uint32_t then cast
         auto type_u = read_bytes<uint32_t>(rowBytes, index);
         if(!type_u) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
         DataType dtype = static_cast<DataType>(*type_u);
@@ -256,17 +249,17 @@ bool flush_page(std::fstream& file, const Page& page) {
 
     file.write(reinterpret_cast<const char*>(&page.header), sizeof(PageHeader));
     if(!file || file.tellg() != (pageOffset + sizeof(PageHeader))) {
-        std::cerr << "Failed to flash header" << std::endl;
+        std::cerr << "Failed to flush header" << std::endl;
         return false;
     }
 
-    const int DataBytesOffs = pageOffset + sizeof(PageHeader);
+    const int DataBytesOffs = sizeof(PageHeader) + pageOffset;
     file.seekg(DataBytesOffs, std::ios::beg);
 
     file.write(page.buffer.data(), PAGE_SIZE);
 
-    if(!file || file.tellg() != (DataBytesOffs + sizeof(page.buffer))) {
-        std::cerr << "Failed to flash byte buffer" << std::endl;
+    if(!file) {
+        std::cerr << "Failed to flush byte buffer" << std::endl;
         return false;
     }
 
@@ -276,12 +269,34 @@ bool flush_page(std::fstream& file, const Page& page) {
 void mark_dirty(Page& page) {
     page.dirty = true;
 }
+void mark_clean(Page& page) {
+    page.dirty = false;
+}
+bool will_fit(const Page& page, const std::vector<char>& rowbytes) {
+    auto space = PAGE_SIZE - page.header.freespace;
+    std::cout << "space: " << space << "\n";
+    if((space + rowbytes.size()) > space) return true;
+    return false;
+};
 
-bool INSERT(Page& page, const Row& row) {
+bool INSERT(Page& page, Row& row) {
+
+    std::vector<char> rowBytes = serializeRow(row);
+    if(!will_fit(page, rowBytes)) {
+        std::cout << "full\n";
+        return false;
+    }
+    std::cout << "Row size: " << row.sizeOfRow << "\n";
+    std::cout << "Inserting into position: " << (*page.buffer.begin()) + page.header.freespace << "\n";
+    page.buffer.insert(page.buffer.begin() + page.header.freespace, rowBytes.data(), rowBytes.data() + rowBytes.size());
+    std::cout << "Pointer position after inserting: " << ((*page.buffer.begin()) + page.header.freespace) + row.sizeOfRow  << "\n";
+    page.header.freespace += rowBytes.size();
+    mark_dirty(page);
+    
     return true;
 }
 
-int main() {
+void test_serialize() {
     Entry entry01{static_cast<DataType>(1), 26};
     Entry entry02{static_cast<DataType>(2), "Monday"};
     Entry entry03{static_cast<DataType>(3), 20.4};
@@ -300,7 +315,64 @@ int main() {
     std::optional<Row> deRow = deserializeRow(bytes);
     if(!deRow) {
         std::cerr << "Failed to deserialize Row \n";
-        return 1;
+        return;
     }
     printRow(*deRow);
+}
+
+int main() {
+
+    Row row1;
+    row1.add_entry(static_cast<DataType>(1), 26);
+    row1.add_entry(static_cast<DataType>(2), "Monday");
+    row1.add_entry(static_cast<DataType>(3), 20.4);
+
+    Row row2;
+    row2.add_entry(static_cast<DataType>(1), 100);
+    row2.add_entry(static_cast<DataType>(2), "Tuesday");
+    row2.add_entry(static_cast<DataType>(3), 120.4);
+
+    PageHeader header;
+    Page page;
+    header.id = 0;
+    page.header = header;
+    if(!INSERT(page, row1)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+    if(!INSERT(page, row2)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
+    flush_page(file, page);
+    std::optional<Page> new_page_ptr = load_page(file, 0);
+    if(!new_page_ptr) {
+        std::cerr << "Failed to load page\n";
+        return 1;
+    }
+    Page new_page = *new_page_ptr;
+
+    std::optional<Row> row1_ptr = deserializeRow(new_page.buffer);
+    if(!row1_ptr) {
+        std::cerr << "Failed to deserialize row 1\n";
+        return 1;
+    }
+
+    Row new_row1 = *row1_ptr;
+
+    std::vector<char> second_bytes = {new_page.buffer.begin() + sizeof(new_row1.tumpstoned) + sizeof(new_row1.sizeOfRow) + new_row1.sizeOfRow, new_page.buffer.end()};
+
+    std::optional<Row> row2_ptr = deserializeRow(second_bytes);
+    if(!row2_ptr) {
+        std::cerr << "Failed to deserialize row 2\n";
+        return 1;
+    }
+
+    Row new_row2 = *row2_ptr;
+    printRow(new_row1);
+    printRow(new_row2);
+
+    std::cout << "Done\n";
 }
