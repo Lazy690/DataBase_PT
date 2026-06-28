@@ -79,13 +79,11 @@ struct Page {
     Page() : buffer(PAGE_SIZE) {}
 };
 
-struct PageTracker {
-    int latestID;
-    std::vector<int> loadedIDs;
-    std::vector<Page> pages;
-    PageTracker(int l) {
-        latestID = l;
-        pages.reserve(50);
+struct Pager {
+    std::unordered_map<std::string, RecordHeader> tableMetadata;
+    std::unordered_map<int, Page> pages;
+    Pager() {
+        pages.reserve(MAXPAGES);
     }
 };
 
@@ -277,16 +275,16 @@ bool will_fit(const Page& page, size_t rowSize) {
     return false;
 };
 
-Page* find_free_page(PageTracker& T, size_t rowSize) {
+Page* find_free_page(Pager& T, size_t rowSize) {
     
     Page* page = nullptr;
 
     for (auto& loadedPage : T.pages) {
-        if(!will_fit(loadedPage, rowSize)) {
+        if(!will_fit(loadedPage.second, rowSize)) {
             continue;
         }
         else {
-            page = &loadedPage;
+            page = &loadedPage.second;
             return page;
         }
     }
@@ -294,17 +292,18 @@ Page* find_free_page(PageTracker& T, size_t rowSize) {
     return page;
 }
 
-bool INSERT(PageTracker& tracker, Row& row) {
+bool INSERT(Pager& tracker, Row& row) {
 
     std::vector<char> rowBytes = serializeRow(row);
     bool found = false;
     Page* page = find_free_page(tracker, rowBytes.size());
-
+    /*
     if(page == nullptr) {
         auto it = tracker.pages.end();
         tracker.pages.insert(it, create_page(tracker.latestID));
         page = &tracker.pages.back();
     }
+    */
 
     auto insert_position = page->buffer.begin() + page->header.freespace;
     
@@ -393,10 +392,8 @@ struct ScanResult {
     Row row;
 };
 
-std::optional<std::vector<ScanResult>>
-ScanPage(const Page& page, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
  
-    std::vector<ScanResult> results;
     auto cursor = page.buffer.begin();
 
     for (int i = 0; i < page.header.NumRows; i++) {
@@ -406,7 +403,7 @@ ScanPage(const Page& page, size_t column_index, const Conditional conditional, c
 
         if(!rowPtr) {
             std::cerr << "Failed to deserializeRow a row at page: " << page.header.id <<std::endl;
-            return std::nullopt;
+            return false;
         }
 
         Row row = *rowPtr;
@@ -438,17 +435,55 @@ ScanPage(const Page& page, size_t column_index, const Conditional conditional, c
         int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
         cursor += totalSkipSize;
     }
+    return true;
+}
+std::optional<std::vector<ScanResult>>
+ScanTable(std::string TableName, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+    
+    std::vector<ScanResult> results;
+
+    if(pager.tableMetadata[TableName].PAGECOUNT <= 0) {
+        std::cout << "Table has no pages\n";
+        return results;
+    } 
+    //!!!!!!Temporary!!!!!!
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    ///////////////////////
+
+    for (int i = 0; i < pager.tableMetadata[TableName].PAGECOUNT; i++) {
+        auto it = pager.pages.find(i);
+        if(it == pager.pages.end()) {
+          
+            std::cout << "Did not find page id: " << i << "\n"; 
+            auto loadedPage = load_page(file, i);
+            if(!loadedPage) {
+                std::cerr << "Failed to load page of ID: " << i << " When scanning the table\n";
+                return std::nullopt;
+            }
+
+            std::cout << "loaded Page id: " << i << "\n";
+
+            pager.pages.insert({i, *loadedPage});
+        }
+        
+        std::vector<ScanResult> result;       
+        if(!ScanPage(result, pager.pages.at(i), column_index, conditional, value)) {
+            std::cerr << "Failed to scan table\n";
+            return std::nullopt;
+        }
+
+        std::cout << "Result for page: " << i << " is " << result.size() << "\n";
+
+        results.insert(results.end(), result.begin(), result.end());
+    }
+
     return results;
+
 }
 
-
 std::optional<std::vector<Row>> 
-SELECT(PageTracker& tracker, size_t column_index, Entry key) {
-    
-    std::vector<Row> resultSet;
-
-    return resultSet;
-
+SELECT(Pager& tracker, size_t column_index, Entry key) {
+    return std::nullopt;
 }
 void printRow(Row& row) {
     std::cout << "tumpstoned: " << row.tumpstoned << "\n";
@@ -568,6 +603,27 @@ void testInsert() {
 }
 */
 
+    bool INSERT(Page& page, Row& row) {
+
+        std::vector<char> rowBytes = serializeRow(row);
+        /*
+        if(page == nullptr) {
+            auto it = tracker.pages.end();
+            tracker.pages.insert(it, create_page(tracker.latestID));
+            page = &tracker.pages.back();
+        }
+        */
+
+        auto insert_position = page.buffer.begin() + page.header.freespace;
+        
+        page.buffer.insert(insert_position, rowBytes.data(), rowBytes.data() + rowBytes.size());
+
+        page.header.freespace += rowBytes.size();
+        mark_dirty(page);
+        page.header.NumRows += 1;
+        
+        return true;
+    }
 int main() {
 
     Row row1;
@@ -585,50 +641,130 @@ int main() {
     row3.add_entry(static_cast<DataType>(2), "Wensday");
     row3.add_entry(static_cast<DataType>(3), 12.4556);
 
+    Row row4;
+    row4.add_entry(static_cast<DataType>(1), 26);
+    row4.add_entry(static_cast<DataType>(2), "Thursday");
+    row4.add_entry(static_cast<DataType>(3), 20.4);
+
+    Row row5;
+    row5.add_entry(static_cast<DataType>(1), 100);
+    row5.add_entry(static_cast<DataType>(2), "Friday");
+    row5.add_entry(static_cast<DataType>(3), 120.4);
+
+    Row row6;
+    row6.add_entry(static_cast<DataType>(1), 5000);
+    row6.add_entry(static_cast<DataType>(2), "Saturday");
+    row6.add_entry(static_cast<DataType>(3), 12.4556);
+
+    Row row7;
+    row7.add_entry(static_cast<DataType>(1), 26);
+    row7.add_entry(static_cast<DataType>(2), "Sunday");
+    row7.add_entry(static_cast<DataType>(3), 20.4);
+
+    Row row8;
+    row8.add_entry(static_cast<DataType>(1), 100);
+    row8.add_entry(static_cast<DataType>(2), "Monday Funday");
+    row8.add_entry(static_cast<DataType>(3), 120.4);
+
+    Row row9;
+    row9.add_entry(static_cast<DataType>(1), 5000);
+    row9.add_entry(static_cast<DataType>(2), "Femboy fridays with yohan the butcher");
+    row9.add_entry(static_cast<DataType>(3), 12.4556);
+
+
     PageHeader header;
     Page page;
     header.id = 0;
     page.header = header;
-    PageTracker tracker(0);
-    tracker.pages.insert(tracker.pages.begin(), page);
 
-    if(!INSERT(tracker, row1)) {
+    PageHeader header2;
+    Page page2;
+    header2.id = 1;
+    page2.header = header2;
+
+    PageHeader header3;
+    Page page3;
+    header3.id = 2;
+    page3.header = header3;
+
+    RecordHeader RH;
+    RH.PAGECOUNT = 3;
+
+
+    if(!INSERT(page, row1)) {
         std::cerr << "failed to insert\n";
         return 1;
     }
-    if(!INSERT(tracker, row2)) {
+    if(!INSERT(page, row2)) {
         std::cerr << "failed to insert\n";
         return 1;
     }
-    if(!INSERT(tracker, row3)) {
+    if(!INSERT(page, row3)) {
         std::cerr << "failed to insert\n";
         return 1;
     }
+
+
+
+    if(!INSERT(page2, row4)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+    if(!INSERT(page2, row5)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+    if(!INSERT(page2, row6)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+
+
+
+    if(!INSERT(page3, row7)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+    if(!INSERT(page3, row8)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+    if(!INSERT(page3, row9)) {
+        std::cerr << "failed to insert\n";
+        return 1;
+    }
+
+    Pager tracker;
+    tracker.tableMetadata["Schedules"] = RH;
+    tracker.pages[0] = page;
+    tracker.pages[1] = page2;
+    tracker.pages[2] = page3;
 
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
     flush_page(file, tracker.pages[0]);
-
-
+    flush_page(file, tracker.pages[1]);
+    flush_page(file, tracker.pages[2]);
 
 
     if(!file) {
         std::cout << "failed to find or open file\n";
         return 1;
     }
-    PageTracker pager(0);
-    pager.pages.push_back(*load_page(file, 0));
+    file.close();
 
-
-    auto ResultSetPTR = ScanPage(pager.pages[0], 1, Conditional::EQUAL, "Tuesday");
-    if(!ResultSetPTR) {
-        std::cerr << "Failed\n";
+    Pager pager;
+    pager.tableMetadata["Schedules"] = RH;
+    auto ptr = ScanTable("Schedules", pager, 1, Conditional::EQUAL, "Femboy fridays with yohan the butcher");
+    if (!ptr) {
+        std::cerr << "Table scan did not work\n";
         return 1;
     }
-
-    std::vector<ScanResult> ResultSet = *ResultSetPTR;
-
-    for (auto result : ResultSet) {
-        std::cout << "Rows offset: " << result.offset << "\n";
+    std::vector<ScanResult> resultSet = *ptr;
+    if (resultSet.empty()) {
+        std::cerr << "Empty result set\n";
+        return 1;
+    }
+    for (auto result : resultSet) {
         printRow(result.row);
     }
 
