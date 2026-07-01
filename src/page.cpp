@@ -51,7 +51,7 @@ struct Row {
         else if (entry.type == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
         else if (entry.type == DataType::REAL)    sizeOfRow += sizeof(double);
 
-        //sizeOfRow += sizeof(uint32_t);
+        sizeOfRow += sizeof(uint32_t);
         values.push_back(entry);
     };
         
@@ -69,9 +69,14 @@ struct Row {
             if      (entry.type == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
             else if (entry.type == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
             else if (entry.type == DataType::REAL)    sizeOfRow += sizeof(double);
+            sizeOfRow += sizeof(uint32_t);
         }
+
     }
+
 };
+
+void printRow(Row& row);
 
 struct RecordHeader {
     uint32_t MAGIC     = 0;
@@ -154,15 +159,15 @@ bool flush_page(std::fstream& file, const Page& page) {
     const int DataBytesOffs = sizeof(PageHeader) + pageOffset;
     file.seekp(DataBytesOffs, std::ios::beg);
     
-    std::cout << "Buffer size: " << page.buffer.size() << "\n";
+    //std::cout << "Buffer size: " << page.buffer.size() << "\n";
     
     file.write(page.buffer.data(), PAGE_SIZE);
-    
+    /*
     std::cout << "good=" << file.good()
               << " fail=" << file.fail()
               << " bad=" << file.bad()
               << " eof=" << file.eof() << "\n";
-
+    */
     std::cout << "Page: " << page.header.id << " flushed successfully\n";
 
     return true;
@@ -241,7 +246,7 @@ Page* requestPageWithSpace(std::fstream& file, Pager& pager, const std::string& 
 std::vector<char> serializeRow(Row& row) {
 
     std::vector<char> bytes;
-    bytes.reserve(64 + row.sizeOfRow);
+    bytes.reserve(row.size());
 
     uint8_t tomb = row.tumpstoned ? 1 : 0;
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&tomb), reinterpret_cast<const char*>(&tomb) + sizeof(tomb));
@@ -299,7 +304,10 @@ deserializeRow(std::span<const char> rowBytes) {
     std::size_t index = 0;
 
     auto tomb_u = read_bytes<uint8_t>(rowBytes, index);
-    if(!tomb_u) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
+    if(!tomb_u) { 
+        std::cerr << "index went over the buffer size\n"; 
+        return std::nullopt; 
+    }
     row.tumpstoned = (*tomb_u != 0);
 
     std::optional<uint32_t> sizeOfRow = read_bytes<uint32_t>(rowBytes, index);
@@ -310,8 +318,13 @@ deserializeRow(std::span<const char> rowBytes) {
 
     std::vector<Entry> entries;
     std::size_t end = index + *sizeOfRow;
-
+    int count = 0;
+    
     while (index < end) {
+
+        //std::cout << "deserializeRow iteration: " << ++count << std::endl;
+        //std::cout << "deserializeRow position: " << index << "/" << end << std::endl;
+
         auto type_u = read_bytes<uint32_t>(rowBytes, index);
         if(!type_u) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
         DataType dtype = static_cast<DataType>(*type_u);
@@ -342,11 +355,13 @@ deserializeRow(std::span<const char> rowBytes) {
             }
         }
 
+        //std::cout << "deserializeRow position after: " << index << "/" << end << std::endl;
         entries.push_back(std::move(entry));
     }
     
     row.sizeOfRow  = *sizeOfRow;
     row.values     = std::move(entries);
+    //printRow(row);
 
     return row;
 }
@@ -355,69 +370,44 @@ deserializeRow(std::span<const char> rowBytes) {
 template<typename T>
 bool compare(T RowValue, Conditional conditional, T value) {
     if (conditional == Conditional::EQUAL) {
-
         if(RowValue == value){
-            //std::cout << value << " is equal to " << RowValue << "\n";
             return true;
         }
         else {
-            //std::cout << value << " is NOT equal to " << RowValue << "\n";
             return false;
-
         } 
-
     }
     if (conditional == Conditional::GREATER) {
-
-        if(RowValue < value){
-            //std::cout << value << " is greater to " << RowValue << "\n";
+        if(RowValue > value){
             return true;
         }
         else {
-            //std::cout << value << " is NOT greater to " << RowValue << "\n";
             return false;
-
         } 
-
     }
     if (conditional == Conditional::LESSER) {
-      
-        if(RowValue > value){
-            //std::cout << value << " is lesser to " << RowValue << "\n";
+        if(RowValue < value){
             return true;
         }
         else {
-            //std::cout << value << " is NOT lesser to " << RowValue << "\n";
             return false;
-
         } 
-
     }
     if (conditional == Conditional::GREATERorEQUAL) {
-
-        if(RowValue <= value){
-            //std::cout << value << " is greater or equal to " << RowValue << "\n";
+        if(RowValue >= value){
             return true;
         }
         else {
-            //std::cout << value << " is NOT greater or equal to " << RowValue << "\n";
             return false;
-
         } 
-
     }
     if (conditional == Conditional::LESSERorEQUAL) {
-      
-        if(RowValue >= value){
-            //std::cout << value << " is lesser or equal to " << RowValue << "\n";
+        if(RowValue <= value){
             return true;
         }
         else {
-            //std::cout << value << " is NOT lesser or equal to " << RowValue << "\n";
             return false;
-
         } 
-
     }
     return false;
 };
@@ -428,11 +418,45 @@ struct ScanResult {
     Row row;
 };
 
+bool ScanAllRows(std::vector<ScanResult>& results, Page page) {
+
+    auto cursor = page.buffer.begin();
+
+    for (int i = 0; i < page.header.NumRows; i++) {
+        std::span bytes = {cursor, page.buffer.end()};
+
+        std::optional<Row> rowPtr = deserializeRow(bytes);
+
+        if(!rowPtr) {
+            std::cerr << "Failed to deserializeRow a row at page: " << page.header.id <<std::endl;
+            return false;
+        }
+
+        Row row = *rowPtr;
+
+        if(row.tumpstoned) {
+              int tumpstoneByteSize = sizeof(row.tumpstoned);
+              int sizeOfRowByteSize = sizeof(row.sizeOfRow);
+              int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
+              cursor += totalSkipSize;
+              continue;
+          }
+
+          size_t rowOffset  = std::distance(page.buffer.begin(), cursor);
+          size_t ID         = page.header.id;
+
+          results.push_back({ID, rowOffset, row});
+
+          int tumpstoneByteSize = sizeof(row.tumpstoned);
+          int sizeOfRowByteSize = sizeof(row.sizeOfRow);
+          int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
+          cursor += totalSkipSize;
+    }
+    return true;
+}
 bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
  
     auto cursor = page.buffer.begin();
-
-    std::cout << "NumRows on page: " << page.header.id << " is " << page.header.NumRows << "\n";
 
     for (int i = 0; i < page.header.NumRows; i++) {
         std::span bytes = {cursor, page.buffer.end()};
@@ -457,7 +481,7 @@ bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_
         size_t rowOffset  = std::distance(page.buffer.begin(), cursor);
         size_t ID         = page.header.id;
 
-        std::visit([&value, conditional, &results, row, rowOffset, ID](const auto& x) {
+        std::visit([&value, conditional, &results, &row, rowOffset, ID](const auto& x) {
             using T = std::decay_t<decltype(x)>;
               
             if constexpr (std::is_same_v<T, int32_t>) {
@@ -524,7 +548,7 @@ bool SELECT(std::vector<Row>& resultSet, std::string TableName, Pager& pager, si
     }
 
     std::vector<ScanResult> results = *resultsPtr;
-    resultSet.resize(results.size());
+    resultSet.reserve(results.size());
     for (int i = 0; i < results.size(); i++) {
         resultSet.push_back(results[i].row);
     }
@@ -562,9 +586,10 @@ bool DELETE(std::string TableName, Pager& pager, size_t column_index, const Cond
 }
 
 struct Set {
-    size_t column_index;
+    size_t column_index = 0;
     std::variant<int32_t, std::string, double> value;
 };
+
 bool UPDATE(std::string TableName, Pager& pager, std::vector<Set> sets,
             size_t column_index, const Conditional conditional, 
             const std::variant<int32_t, std::string, double> value) {
@@ -584,24 +609,43 @@ bool UPDATE(std::string TableName, Pager& pager, std::vector<Set> sets,
         if (!page) {
             return false;
         }
-
+        result.row.tumpstoned = 1;
         insertRowIntoBuff(page->buffer, result.row, result.offset);
         mark_dirty(*page);
-
+        result.row.tumpstoned = 0;
+        
+        
+        Row& UpdatedRow = result.row;
         for (auto set : sets) {
-            result.row.values[set.column_index].value = set.value;
+            UpdatedRow.values[set.column_index].value = set.value;
         }
+        UpdatedRow.RecalculateSize();
+        /*
+        for(int i = 0; i < result.row.values.size(); i++) {
+            Entry entry;
+        
+            auto it = sets.find(i);
+            if (it != sets.end()) {
+                entry.type  = result.row.values[i].type;
+                entry.value = sets.at(i);
+                UpdatedRow.add_entry(entry);
+            }
+            else {
+                entry.type  = result.row.values[i].type;
+                entry.value = result.row.values[i].value;
 
-        result.row.RecalculateSize();
+                UpdatedRow.add_entry(entry);
+            }
+        }
+        */
+        //printRow(UpdatedRow);
 
-        Page* PageWithSpace = requestPageWithSpace(file, pager, TableName, result.row);
+        Page* PageWithSpace = requestPageWithSpace(file, pager, TableName, UpdatedRow);
         if(!PageWithSpace) {
             return false;
         }
-        std::cout << "Page with space: " << PageWithSpace->header.id << "\n";
-        std::cout << "Page free space: " << PageWithSpace->header.freespace << "\n";
 
-        insertRowIntoBuff(PageWithSpace->buffer, result.row, PageWithSpace->header.freespace);
+        insertRowIntoBuff(PageWithSpace->buffer, UpdatedRow, PageWithSpace->header.freespace);
         PageWithSpace->header.freespace += result.row.size();
         PageWithSpace->header.NumRows++;
         mark_dirty(*PageWithSpace);
@@ -658,6 +702,28 @@ void test_serialize() {
     printRow(*deRow);
 }
 
+bool INSERT(std::string TableName, Pager& pager, Row& row) {
+
+    //!!!!!!Temporary!!!!!!
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    ///////////////////////
+
+    Page* page = requestPageWithSpace(file, pager, TableName, row);
+    if (!page) {
+        return false;
+    }
+
+    size_t insert_position = page->header.freespace;
+
+    insertRowIntoBuff(page->buffer, row, insert_position);
+
+    page->header.freespace += row.size();
+    mark_dirty(*page);
+    page->header.NumRows += 1;
+      
+    return true;
+}
+
 bool INSERT(Page& page, Row& row) {
 
     /*
@@ -677,7 +743,7 @@ bool INSERT(Page& page, Row& row) {
     page.header.NumRows += 1;
       
       return true;
-  }
+}
 
 //////////////////////////////////////
 /* TODO:
@@ -687,7 +753,7 @@ bool INSERT(Page& page, Row& row) {
  * 4. Make SURE that if the row has a Primary Key that UPDATE will not auto incriment when inserting
  */
 int main() {
-
+    /*
     Row row1;
     row1.add_entry(static_cast<DataType>(1), 29);
     row1.add_entry(static_cast<DataType>(2), "Monday");
@@ -730,7 +796,7 @@ int main() {
 
     Row row9;
     row9.add_entry(static_cast<DataType>(1), 5000);
-    row9.add_entry(static_cast<DataType>(2), "Femboy fridays with yohan the butcher");
+    row9.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
     row9.add_entry(static_cast<DataType>(3), 12.4556);
 
 
@@ -795,9 +861,13 @@ int main() {
         std::cerr << "failed to insert\n";
         return 1;
     }
-
+    */
+    
+    RecordHeader RH;
+    RH.PAGECOUNT = 3;
     Pager tracker;
     tracker.tableMetadata["Schedules"] = RH;
+    /*
     tracker.pages[0] = page;
     tracker.pages[1] = page2;
     tracker.pages[2] = page3;
@@ -806,27 +876,63 @@ int main() {
     flush_page(file, tracker.pages[0]);
     flush_page(file, tracker.pages[1]);
     flush_page(file, tracker.pages[2]);
-
+    
 
     if(!file) {
         std::cout << "failed to find or open file\n";
         return 1;
     }
+    file.close();
+    */
 
-    Pager pager;
-    pager.tableMetadata["Schedules"] = RH;
+    //RecordHeader RH;
+    //Pager pager;
+    //pager.tableMetadata["Schedules"] = RH;
 
-    if (!UPDATE("Schedules", tracker, {{1, "juicy"}} ,1, Conditional::EQUAL, "Femboy fridays with yohan the butcher")) {
+    /*if (!UPDATE("Schedules", tracker, {{1, "Yohan my boy wife!"}, {0, 69}, {2, 7.6}} ,1, Conditional::EQUAL, "Femboy fridays with yohan the butcher")) {
+//    if (!UPDATE("Schedules", pager, {{1, "ble"}, {0, 69}, {2, 20.4}} ,1, Conditional::EQUAL, "Monday")) {
         std::cout << "SELECT Failed\n";
+        return 1;
+    }*/
+
+    
+    /*
+    std::fstream file2("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
+    std::cout << "Second flush: ";
+    flush_page(file2, pager.pages[2]);
+    file2.close();
+    */
+    std::vector<Row> resultSet;
+    /*
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
+    for(int i = 0; i < pager.pages.size(); i++) {
+        std::vector<ScanResult> scanResult;
+        if (!ScanAllRows(scanResult, pager.pages[i])) {
+            std::cout << "Failed to scan all rows\n";
+            return 1;
+        }
+        for (auto res : scanResult) {
+            printRow(res.row);
+        }
+    }
+    file.close();
+    */
+    Row row10;
+    row10.add_entry(static_cast<DataType>(1), 250);
+    row10.add_entry(static_cast<DataType>(2), "This is my kindom come 2");
+    row10.add_entry(static_cast<DataType>(3), 10.6);
+
+    if (!INSERT("Schedules", tracker, row10)) {
+        std::cout << "Inserion Failed\n";
         return 1;
     }
 
+    std::fstream file2("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     std::cout << "Second flush: ";
-    flush_page(file, tracker.pages[2]);
-
-    std::vector<Row> resultSet;
-
-    if (!SELECT(resultSet, "Schedules", tracker, 1, Conditional::EQUAL, "juicy")) {
+    flush_page(file2, tracker.pages[2]);
+    file2.close();
+    std::cout << "Selecting now: \n\n";
+    if (!SELECT(resultSet, "Schedules", tracker, 1, Conditional::EQUAL, "This is my kindom come 2")) {
         std::cout << "SELECT Failed\n";
         return 1;
     }
