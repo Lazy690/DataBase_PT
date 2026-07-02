@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstring>
 #include <span>
+#include <list>
 
 const int KILOBYTE = 1024;
 constexpr int PAGE_SIZE = KILOBYTE; 
@@ -28,6 +29,7 @@ enum class Conditional {
     GREATERorEQUAL,
     LESSERorEQUAL
 };
+
 
 struct Entry {
     DataType type;
@@ -97,13 +99,101 @@ struct Page {
     Page() : buffer(PAGE_SIZE) {}
 };
 
+struct PageKey {
+    uint32_t tableID = 0;
+    uint32_t pageID = 0;
+    bool operator==(const PageKey& other) const noexcept {
+        if(tableID == other.tableID && pageID == other.pageID) return true;
+        return false;
+    }
+};
+
+struct PageKeyHash {
+    size_t operator() (const PageKey& key) const noexcept {
+        size_t hash1 = std::hash<uint32_t>{} (key.tableID);
+        size_t hash2 = std::hash<uint32_t>{} (key.pageID);
+        const auto distribution = 0x9e3779b97f4a7c15ULL;
+        return hash1 ^ (hash2 + distribution + (hash1<<6) + (hash1>>2));
+    }
+};
+
 struct Pager {
-    std::unordered_map<std::string, RecordHeader> tableMetadata;
-    std::unordered_map<int, Page> pages;
+    std::unordered_map<uint32_t, RecordHeader> tableMetadata;
+    std::unordered_map<PageKey, Page, PageKeyHash> pages;
+    
+    std::unordered_map<PageKey, std::list<PageKey>::iterator, PageKeyHash> PFIterators;
+    std::list<PageKey> PageFrequency;
+
     Pager() {
         pages.reserve(MAXPAGES);
     }
 };
+
+void mark_clean(Page& page);
+void mark_dirty(Page& page);
+bool flush_page(std::fstream& file, const Page& page);
+
+bool updatePageFrequency(Pager& pager, PageKey ID) {
+    
+    auto lookup = pager.PFIterators.find(ID);
+    if(lookup == pager.PFIterators.end()) {
+        pager.PageFrequency.push_front(ID);
+
+        auto it = pager.PageFrequency.begin();
+        pager.PFIterators.insert({ID, it});
+    }
+    else {
+        pager.PageFrequency.splice(pager.PageFrequency.begin(),
+                                   pager.PageFrequency,
+                                   pager.PFIterators.at(ID));
+    }
+    return true;
+}
+
+bool evictPage(std::fstream& file, Pager& pager) {
+    PageKey key = pager.PageFrequency.back();
+    ////////////////////
+    ///TEMPORARY!!
+    auto it = pager.pages.find(key);
+    if (it == pager.pages.end()) {
+        std::cerr << "Could not find page in pager when trying to evict it\n";
+        return false;
+    }
+
+    Page* page = &pager.pages.at(key);
+
+    if(page->dirty) {
+        if(!flush_page(file, *page)) {
+            std::cerr << "Failed to flush page when evicting it\n";
+            return false;
+        }
+    }
+    
+    pager.PFIterators.erase(key);
+    pager.PageFrequency.pop_back();
+    pager.pages.erase(key);
+    return true;
+}
+
+bool COMMIT(std::fstream& file, Pager& pager) {
+    for (auto& [key, page] : pager.pages) {
+
+        if(!page.dirty) continue;
+
+        if(!flush_page(file, page)) {
+            std::cerr << "Failed to flush page: " << page.header.id << "\n";
+            return false;
+        };
+        mark_clean(page);
+    }
+    return true;
+}
+
+void printPageKey(PageKey p) {
+    std::cout << "------------------------\n";
+    std::cout << p.tableID << "\n";
+    std::cout << p.pageID << "\n";
+}
 
 Page create_page(uint32_t id) {
     PageHeader newHeader = {id, 0, 0};
@@ -159,15 +249,8 @@ bool flush_page(std::fstream& file, const Page& page) {
     const int DataBytesOffs = sizeof(PageHeader) + pageOffset;
     file.seekp(DataBytesOffs, std::ios::beg);
     
-    //std::cout << "Buffer size: " << page.buffer.size() << "\n";
-    
     file.write(page.buffer.data(), PAGE_SIZE);
-    /*
-    std::cout << "good=" << file.good()
-              << " fail=" << file.fail()
-              << " bad=" << file.bad()
-              << " eof=" << file.eof() << "\n";
-    */
+
     std::cout << "Page: " << page.header.id << " flushed successfully\n";
 
     return true;
@@ -200,45 +283,53 @@ Page* find_free_page(Pager& T, size_t rowSize) {
     return page;
 }
 
-Page* requestPage(std::fstream& file, Pager& pager, size_t ID) {
+Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
     Page* page = nullptr;
     auto it = pager.pages.find(ID);
     if (it == pager.pages.end()) {
-        auto loadedPage = load_page(file, ID);
+        auto loadedPage = load_page(file, ID.pageID);
         if(!loadedPage) {
-            std::cerr << "Failed to load page of ID: " << ID << "\n";
+            std::cerr << "Failed to load page of ID: \n";
+            printPageKey(ID);
             return page;
         }
-        std::cout << "Page: " << ID << " Loaded\n";
+        std::cout << "Page: " << ID.pageID << " Loaded\n";
+        if(pager.pages.size() == MAXPAGES) {
+            evictPage(file, pager);
+        }
         pager.pages.insert({ID, *loadedPage});
     }
-    else std::cout << "Cache hit on page: " << ID << "\n";
+    else std::cout << "Cache hit on page: " << ID.pageID << "\n";
     page = &pager.pages.at(ID);
     
+    updatePageFrequency(pager, ID);
     return page;
 }
-Page* requestPageWithSpace(std::fstream& file, Pager& pager, const std::string& TableName, Row& row) {
+Page* requestPageWithSpace(std::fstream& file, Pager& pager, const uint32_t tableID, Row& row) {
 
-    Page* page = nullptr;
+    Page* page;
 
     //Just in case (-_-)
     if (row.size() > PAGE_SIZE) {
         std::cerr << "Inserion of row will end in Page overflow\n";
-        return page;
+        return nullptr;
     }
 
-    int latestID = pager.tableMetadata[TableName].PAGECOUNT - 1;
+    if (pager.tableMetadata[tableID].PAGECOUNT == 0) {
+        return nullptr;
+    }
+    uint32_t latestID = pager.tableMetadata[tableID].PAGECOUNT - 1;
 
-    page = requestPage(file, pager, latestID);
+    page = requestPage(file, pager, {tableID, latestID});
     if(!page) {
-        return page;
+        return nullptr;
     }
 
     if (!will_fit(*page, row.size())) {
-       pager.tableMetadata[TableName].PAGECOUNT++;
+       pager.tableMetadata[tableID].PAGECOUNT++;
        latestID++;
-       pager.pages.insert({latestID, create_page(latestID)});
-       page = &pager.pages.at(latestID);
+       pager.pages.insert({{tableID, latestID}, create_page(latestID)});
+       page = &pager.pages.at({tableID, latestID});
     }
     return page;
 }
@@ -509,11 +600,11 @@ bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_
     return true;
 }
 std::optional<std::vector<ScanResult>>
-ScanTable(std::string TableName, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+ScanTable(uint32_t tableID, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
     
     std::vector<ScanResult> results;
 
-    if(pager.tableMetadata[TableName].PAGECOUNT <= 0) {
+    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) {
         std::cout << "Table has no pages\n";
         return results;
     } 
@@ -521,9 +612,9 @@ ScanTable(std::string TableName, Pager& pager, size_t column_index, const Condit
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     ///////////////////////
 
-    for (int id = 0; id < pager.tableMetadata[TableName].PAGECOUNT; id++) {
+    for (uint32_t id = 0; id < pager.tableMetadata[tableID].PAGECOUNT; id++) {
         
-        Page* page = requestPage(file, pager, id);
+        Page* page = requestPage(file, pager, {tableID, id});
 
         std::vector<ScanResult> result;       
         if(!ScanPage(result, *page, column_index, conditional, value)) {
@@ -541,8 +632,8 @@ struct QueryParams {
     
 };
  
-bool SELECT(std::vector<Row>& resultSet, std::string TableName, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
-    auto resultsPtr = ScanTable(TableName, pager, column_index, conditional, value);
+bool SELECT(std::vector<Row>& resultSet, uint32_t tableID, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+    auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
     if (!resultsPtr) {
         return false;
     }
@@ -560,8 +651,8 @@ void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset) {
     std::memcpy(buff.data() + offset, RowBytes.data(), RowBytes.size());
 }
 
-bool DELETE(std::string TableName, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
-    auto resultsPtr = ScanTable(TableName, pager, column_index, conditional, value);
+bool DELETE(uint32_t tableID, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+    auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
     if(!resultsPtr) {
         return false;
     }
@@ -571,8 +662,8 @@ bool DELETE(std::string TableName, Pager& pager, size_t column_index, const Cond
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     ///////////////////////
     for (auto& result : results) {
-        size_t ID = result.pageId;
-        Page* page = requestPage(file, pager, ID);
+        uint32_t ID = result.pageId;
+        Page* page = requestPage(file, pager, {tableID, ID});
         if (!page) {
             return false;
         }
@@ -590,11 +681,11 @@ struct Set {
     std::variant<int32_t, std::string, double> value;
 };
 
-bool UPDATE(std::string TableName, Pager& pager, std::vector<Set> sets,
+bool UPDATE(uint32_t tableID, Pager& pager, std::vector<Set> sets,
             size_t column_index, const Conditional conditional, 
             const std::variant<int32_t, std::string, double> value) {
 
-    auto resultsPtr = ScanTable(TableName, pager, column_index, conditional, value);
+    auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
     if(!resultsPtr) {
         return false;
     }
@@ -604,8 +695,8 @@ bool UPDATE(std::string TableName, Pager& pager, std::vector<Set> sets,
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     ///////////////////////
     for (auto& result : results) {
-        size_t ID = result.pageId;
-        Page* page = requestPage(file, pager, ID);
+        uint32_t ID = result.pageId;
+        Page* page = requestPage(file, pager, {tableID, ID});
         if (!page) {
             return false;
         }
@@ -640,7 +731,7 @@ bool UPDATE(std::string TableName, Pager& pager, std::vector<Set> sets,
         */
         //printRow(UpdatedRow);
 
-        Page* PageWithSpace = requestPageWithSpace(file, pager, TableName, UpdatedRow);
+        Page* PageWithSpace = requestPageWithSpace(file, pager, tableID, UpdatedRow);
         if(!PageWithSpace) {
             return false;
         }
@@ -702,13 +793,13 @@ void test_serialize() {
     printRow(*deRow);
 }
 
-bool INSERT(std::string TableName, Pager& pager, Row& row) {
+bool INSERT(uint32_t tableID, Pager& pager, Row& row) {
 
     //!!!!!!Temporary!!!!!!
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     ///////////////////////
 
-    Page* page = requestPageWithSpace(file, pager, TableName, row);
+    Page* page = requestPageWithSpace(file, pager, tableID, row);
     if (!page) {
         return false;
     }
@@ -866,7 +957,7 @@ int main() {
     RecordHeader RH;
     RH.PAGECOUNT = 3;
     Pager tracker;
-    tracker.tableMetadata["Schedules"] = RH;
+    tracker.tableMetadata[1] = RH;
     /*
     tracker.pages[0] = page;
     tracker.pages[1] = page2;
@@ -919,20 +1010,23 @@ int main() {
     */
     Row row10;
     row10.add_entry(static_cast<DataType>(1), 250);
-    row10.add_entry(static_cast<DataType>(2), "This is my kindom come 2");
+    row10.add_entry(static_cast<DataType>(2), "Excuse me sir..");
     row10.add_entry(static_cast<DataType>(3), 10.6);
 
-    if (!INSERT("Schedules", tracker, row10)) {
+    if (!INSERT(1, tracker, row10)) {
         std::cout << "Inserion Failed\n";
         return 1;
     }
 
+    /*
     std::fstream file2("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     std::cout << "Second flush: ";
-    flush_page(file2, tracker.pages[2]);
+    PageKey key = {1, 2};
+    flush_page(file2, tracker.pages[key]);
     file2.close();
+    */
     std::cout << "Selecting now: \n\n";
-    if (!SELECT(resultSet, "Schedules", tracker, 1, Conditional::EQUAL, "This is my kindom come 2")) {
+    if (!SELECT(resultSet, 1, tracker, 1, Conditional::EQUAL, "Yohan my boy wife!")) {
         std::cout << "SELECT Failed\n";
         return 1;
     }
@@ -943,6 +1037,19 @@ int main() {
 
     for (auto result : resultSet) {
         printRow(result);
+    }
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    
+    //Page* p = requestPage(file, tracker, {1, 0});
+    std::cout << "PageFrequency order: \n";
+    int count = 0;
+    for(auto& p : tracker.PageFrequency) {
+        std::cout << ++count << ": " << p.pageID << "\n";
+    }
+
+    if(!COMMIT(file, tracker)) {
+        std::cerr << "Failed to commit\n";
+        return 1;
     }
 
     std::cout << "Compiles!\n";
