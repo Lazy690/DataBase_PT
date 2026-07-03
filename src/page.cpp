@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <cstddef> 
@@ -14,7 +15,7 @@
 
 const int KILOBYTE = 1024;
 constexpr int PAGE_SIZE = KILOBYTE; 
-const int MAXPAGES = 50;
+const int MAXPAGES = 3;
 
 enum class DataType : uint32_t {
     INTEIRO = 1, //int
@@ -83,9 +84,9 @@ void printRow(Row& row);
 struct RecordHeader {
     uint32_t MAGIC     = 0;
     uint32_t VERSION   = 0;
+    uint32_t TABLEID   = 0;
     uint32_t PAGECOUNT = 0;
 };
-
 struct PageHeader {
     uint32_t id        = 0;
     uint32_t freespace = 0;
@@ -172,6 +173,7 @@ bool evictPage(std::fstream& file, Pager& pager) {
     pager.PFIterators.erase(key);
     pager.PageFrequency.pop_back();
     pager.pages.erase(key);
+    std::cout << "Evicting: " << key.pageID << "\n";
     return true;
 }
 
@@ -256,6 +258,77 @@ bool flush_page(std::fstream& file, const Page& page) {
     return true;
 }
 
+bool load_RecordBank_header(std::fstream& file, RecordHeader& header, uint32_t tableID) {
+    file.seekg(0, std::ios::beg);
+      
+    file.read(reinterpret_cast<char*>(&header), sizeof(RecordHeader));
+    if(!file) {
+        std::cerr << "Failed to load file header" << std::endl;
+        return false;
+    }
+    if(header.TABLEID != tableID) {
+        std::cerr << "Table not found\n";
+        return false;
+    }
+    return true;
+}
+
+int64_t count_pages(std::fstream& file) {
+    file.seekg(0, std::ios::end);
+    int64_t EndOfFile = file.tellg();
+    
+    int64_t file_size = EndOfFile - sizeof(RecordHeader);
+
+    int64_t page_count = (file_size / (PAGE_SIZE + sizeof(PageHeader)));
+    file.seekg(0, std::ios::beg);
+
+    return page_count;
+}
+
+bool validate_RecordBank_header(RecordHeader& globalHeader, RecordHeader& this_Header, int64_t numPages) {
+    if(this_Header.MAGIC != globalHeader.MAGIC) {
+        std::cerr << "File has invalid MAGIC" << std::endl;
+        return false;
+    }
+    if(this_Header.VERSION != globalHeader.VERSION) {
+        std::cerr << "File has invalid file VERSION" << std::endl;
+        return false;
+    }
+
+    if (this_Header.PAGECOUNT != numPages) {
+        std::cerr << "File header's page count is out of sync or corrupted" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool requestRecordBankHeader(std::fstream& file, RecordHeader& globalHeader, RecordHeader& this_header, uint32_t tableID) {
+
+    if(!load_RecordBank_header(file, this_header, tableID)) {
+        return false;
+    };
+    std::cout << "header id : " << this_header.TABLEID <<"\n";
+  
+    int64_t pageCount = count_pages(file);
+
+    if(!validate_RecordBank_header(globalHeader, this_header, pageCount)) {
+        return false;
+    }
+    
+    return true;
+}
+
+bool flush_metadata(std::fstream& file, RecordHeader header) {
+    file.seekp(0, std::ios::beg);
+    file.write(reinterpret_cast<const char*>(&header), sizeof(RecordHeader));
+    if(!file) {
+        std::cerr << "Failed to write header" << std::endl;
+        return false;
+    }
+    return true;
+}
+
 void mark_dirty(Page& page) {
     page.dirty = true;
 }
@@ -263,7 +336,7 @@ void mark_clean(Page& page) {
     page.dirty = false;
 }
 bool will_fit(const Page& page, size_t rowSize) {
-    return page.header.freespace + rowSize <= PAGE_SIZE;
+    return page.header.freespace + rowSize < PAGE_SIZE;
 };
 
 Page* find_free_page(Pager& T, size_t rowSize) {
@@ -289,8 +362,8 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
     if (it == pager.pages.end()) {
         auto loadedPage = load_page(file, ID.pageID);
         if(!loadedPage) {
-            std::cerr << "Failed to load page of ID: \n";
-            printPageKey(ID);
+            //std::cerr << "Failed to load page of ID: \n";
+            //printPageKey(ID);
             return page;
         }
         std::cout << "Page: " << ID.pageID << " Loaded\n";
@@ -307,29 +380,40 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
 }
 Page* requestPageWithSpace(std::fstream& file, Pager& pager, const uint32_t tableID, Row& row) {
 
-    Page* page;
+    Page* page = nullptr;
 
     //Just in case (-_-)
     if (row.size() > PAGE_SIZE) {
         std::cerr << "Inserion of row will end in Page overflow\n";
-        return nullptr;
+        return page;
     }
 
-    if (pager.tableMetadata[tableID].PAGECOUNT == 0) {
-        return nullptr;
-    }
-    uint32_t latestID = pager.tableMetadata[tableID].PAGECOUNT - 1;
-
-    page = requestPage(file, pager, {tableID, latestID});
-    if(!page) {
-        return nullptr;
-    }
-
-    if (!will_fit(*page, row.size())) {
+    uint32_t latestID = pager.tableMetadata[tableID].PAGECOUNT;
+    if (latestID == 0) {
        pager.tableMetadata[tableID].PAGECOUNT++;
-       latestID++;
+       if(pager.pages.size() == MAXPAGES) {
+          evictPage(file, pager);
+       }
        pager.pages.insert({{tableID, latestID}, create_page(latestID)});
        page = &pager.pages.at({tableID, latestID});
+    }
+    else {
+        latestID--;
+        page = requestPage(file, pager, {tableID, latestID});
+        if(!page) {
+            return page;
+        }
+
+        if (!will_fit(*page, row.size())) {
+          pager.tableMetadata[tableID].PAGECOUNT++;
+          latestID++;
+          if(pager.pages.size() == MAXPAGES) {
+              evictPage(file, pager);
+          }
+          pager.pages.insert({{tableID, latestID}, create_page(latestID)});
+          page = &pager.pages.at({tableID, latestID});
+        }
+
     }
     return page;
 }
@@ -836,6 +920,47 @@ bool INSERT(Page& page, Row& row) {
       return true;
 }
 
+bool loadRow(std::ifstream& file, Row& row, std::vector<DataType> types) {
+    //This function if for tests only and assumes the txt file always has the right format!!!
+    //Do not use in production yet!
+    std::string line;
+
+    if(!std::getline(file, line)) {
+        return false;
+    };
+
+    std::stringstream ss(line);
+    std::string w;
+    
+    std::vector<std::string> words;
+    while(ss >> w) {
+        words.push_back(w);
+    }
+    for (int i = 0; i < types.size(); i++) {
+
+        Entry entry;
+        entry.type  = types[i];
+
+        int32_t integer = 0;
+        double  dub     = 0;
+        switch(types[i]) {
+            case DataType::INTEIRO:
+                integer = std::stoll(words[i]);
+                entry.value = integer;
+                break;
+            case DataType::TEXTO:
+                entry.value = words[i];
+                break;
+            case DataType::REAL:
+                dub = std::stod(words[i]);
+                entry.value = dub;
+                break;
+        }
+        row.add_entry(entry);
+    }
+    return true;
+}
+
 //////////////////////////////////////
 /* TODO:
  * 1. Inegrate and TEST requestPageWithSpace() func into INSERT func
@@ -953,11 +1078,20 @@ int main() {
         return 1;
     }
     */
-    
+    //std::fstream file1("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
+    RecordHeader globalHeader{0x44415441, 4};
+    globalHeader.TABLEID = 1;
+    //flush_metadata(file1, globalHeader);
+
     RecordHeader RH;
-    RH.PAGECOUNT = 3;
+    std::fstream file1("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    if (!requestRecordBankHeader(file1, globalHeader, RH, 1)) {
+        std::cout << "Failed to load RecordHeader\n";
+        return 1;
+    }
     Pager tracker;
     tracker.tableMetadata[1] = RH;
+    file1.close();
     /*
     tracker.pages[0] = page;
     tracker.pages[1] = page2;
@@ -1008,6 +1142,7 @@ int main() {
     }
     file.close();
     */
+    /*
     Row row10;
     row10.add_entry(static_cast<DataType>(1), 250);
     row10.add_entry(static_cast<DataType>(2), "Excuse me sir..");
@@ -1017,6 +1152,7 @@ int main() {
         std::cout << "Inserion Failed\n";
         return 1;
     }
+    */
 
     /*
     std::fstream file2("data.bin", std::ios::binary | std::ios::out | std::ios::in);
@@ -1025,6 +1161,7 @@ int main() {
     flush_page(file2, tracker.pages[key]);
     file2.close();
     */
+    /*
     std::cout << "Selecting now: \n\n";
     if (!SELECT(resultSet, 1, tracker, 1, Conditional::EQUAL, "Yohan my boy wife!")) {
         std::cout << "SELECT Failed\n";
@@ -1050,6 +1187,53 @@ int main() {
     if(!COMMIT(file, tracker)) {
         std::cerr << "Failed to commit\n";
         return 1;
+    }
+    */
+
+    std::ifstream rowFile("rows.txt");
+    if(!rowFile) {
+        std::cout << "File not found\n";
+        return 1;
+    }
+    int count = 0;
+    int size = 0;
+    while(true) {
+        std::cout << "------------------------\n";
+        std::cout << "iteration: " << ++count << "\n";
+        Row lrow; 
+        if(!loadRow(rowFile, lrow, {{DataType::INTEIRO, DataType::TEXTO, DataType::REAL}})){
+            std::cout << "end of file\n";
+            break;
+        };
+        size += lrow.size();
+
+        //printRow(lrow);
+        std::cout << "Inserting: \n"; 
+        if (!INSERT(1, tracker, lrow)) {
+            std::cout << "Inserion Failed\n";
+            return 1;
+        }
+        std::cout << "Buff size: " << size << "/" << PAGE_SIZE << "\n";
+        
+        std::cout << "Loaded pages: " << tracker.pages.size() << "\n";
+
+    }
+
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    COMMIT(file, tracker);
+    flush_metadata(file, tracker.tableMetadata[1]);
+    file.close();
+    if (!SELECT(resultSet, 1, tracker, 1, Conditional::EQUAL, "Kirsche")) {
+        std::cout << "SELECT Failed\n";
+        return 1;
+    }
+
+    if(resultSet.empty()) {
+        std::cout << "Query not found\n";
+    }
+
+    for (auto result : resultSet) {
+        printRow(result);
     }
 
     std::cout << "Compiles!\n";
