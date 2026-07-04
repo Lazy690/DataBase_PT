@@ -133,6 +133,30 @@ struct Pager {
 void mark_clean(Page& page);
 void mark_dirty(Page& page);
 bool flush_page(std::fstream& file, const Page& page);
+std::vector<char> serializeRow(Row& row);
+
+template<typename T>
+std::optional<T> 
+read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_t> str_len = std::nullopt) {
+
+    if constexpr (std::is_same_v<T, std::string>) {
+        if(str_len == std::nullopt) return std::nullopt;
+        if(index + *str_len > buff.size()) return std::nullopt;
+        T value;
+        value.resize(*str_len);
+        std::memcpy(value.data(), buff.data() + index, *str_len);
+        index += *str_len;
+        return value;
+    } else {
+        if(index + sizeof(T) > buff.size()) return std::nullopt; 
+        T value;
+        std::memcpy(&value, buff.data() + index, sizeof(T));
+        index += sizeof(T);
+        return value;
+    }
+}
+
+std::optional<Row> deserializeRow(std::span<const char> rowBytes);
 
 bool updatePageFrequency(Pager& pager, PageKey ID) {
     
@@ -175,6 +199,146 @@ bool evictPage(std::fstream& file, Pager& pager) {
     pager.pages.erase(key);
     std::cout << "Evicting: " << key.pageID << "\n";
     return true;
+}
+
+enum class LogCMD : int32_t {
+    START      = 1,
+    INSERT     = 2,
+    DELETE     = 3,
+    COMMIT     = 4,
+    CHECKPOINT = 5,
+    NULLROW    = 6,
+    ENDOFLOG   = 7
+};
+
+struct Log {
+    PageKey ID;
+    LogCMD command;
+    uint32_t offset;
+    Row row;
+    const LogCMD endOfLog = LogCMD::ENDOFLOG;
+
+    size_t size() {
+        return sizeof(PageKey) + sizeof(command) + sizeof(offset) + row.size() + sizeof(endOfLog);
+    }
+};
+
+struct LoggerHeader {
+    uint32_t MAGIC     = 0;
+    uint32_t VERSION   = 0;
+    uint32_t LatestCheckpointOffset = 0;
+};
+
+struct Logger {
+    bool start =    false;
+    bool commited = false;
+
+    std::fstream file;
+    std::vector<char> buffer;
+};
+
+Log CreateLog(const PageKey ID, const LogCMD cmd, const uint32_t offset, const Row& row) {
+    assert(cmd == LogCMD::INSERT || cmd == LogCMD::DELETE);
+    return Log{ID, cmd, offset, row};
+}
+
+std::vector<char> serializeLog(Log& log) {
+    std::vector<char> bytes;
+    bytes.reserve(log.size());
+    
+    PageKey ID = log.ID;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&ID), reinterpret_cast<const char*>(&ID) + sizeof(ID));
+
+    LogCMD command = log.command;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&command), reinterpret_cast<const char*>(&command) + sizeof(command));
+
+    uint32_t offset = log.offset;
+    Row row = log.row;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&offset), reinterpret_cast<const char*>(&offset) + sizeof(offset));
+    std::vector<char> RowBytes = serializeRow(row);
+    bytes.insert(bytes.end(), RowBytes.data(), RowBytes.data() + RowBytes.size());
+
+    LogCMD endOfLog = log.endOfLog;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&endOfLog), reinterpret_cast<const char*>(&endOfLog) + sizeof(endOfLog));
+
+    return bytes;
+}
+std::optional<Log> deserializeLog(std::span<char> logBytes) {
+    Log log;
+    size_t index = 0;
+
+    auto ID      = read_bytes<PageKey>(logBytes, index);
+    if(!ID) {
+        std::cerr << "Failed to deserialize ID when deserializing log\n";
+        return std::nullopt;
+    }
+    
+    auto command = read_bytes<LogCMD>(logBytes, index);
+    if(!command) {
+        std::cerr << "Failed to deserialize command when deserializing log\n";
+        return std::nullopt;
+    }
+
+    auto offset  = read_bytes<uint32_t>(logBytes, index);
+    if(!offset) {
+        std::cerr << "Failed to deserialize offset when deserializing log\n";
+        return std::nullopt;
+    }
+    
+    auto rowptr = deserializeRow({logBytes.begin() + index, logBytes.end()});
+    if(!rowptr) {
+        std::cerr << "Failed to deserialize row when deserializing log\n";
+        return std::nullopt;
+    }
+    index += rowptr->size();
+
+    auto endOfLog = read_bytes<LogCMD>(logBytes, index);
+    if(!endOfLog) {
+        std::cerr << "Failed to deserialize END OF LOG when deserializing log\n";
+        return std::nullopt;
+    }
+    
+    if(*endOfLog != LogCMD::ENDOFLOG) {
+        std::cerr << "Log does not contain END OF LOG byte\n";
+        return std::nullopt;
+    }
+
+    log.ID = *ID;
+    log.command = *command;
+    log.offset = *offset;
+    log.row = *rowptr;
+
+    return log;
+}
+
+bool AppendLog(Logger& logger, Log& log) {
+    assert(logger.start && !logger.commited);
+
+    std::vector<char> bytes = serializeLog(log);
+    logger.buffer.insert(logger.buffer.end(), bytes.data(), bytes.data() + bytes.size());
+    return true;
+}
+
+void printLog(Log& log) {
+
+    std::cout << "Log: \n";
+    std::cout << "Table Id: " << log.ID.tableID 
+              << " Page Id: "    << log.ID.pageID << "\n";
+
+    std::cout << "Command: ";
+    switch(log.command) {
+        case LogCMD::INSERT:
+            std::cout << "INSERT\n";
+            break;
+        case LogCMD::DELETE:
+            std::cout << "DELETE\n";
+            break;
+    }
+
+    std::cout << "Offset: " << log.offset << "\n";
+
+    std::cout << "Row: \n";
+    printRow(log.row);
 }
 
 bool COMMIT(std::fstream& file, Pager& pager) {
@@ -450,27 +614,6 @@ std::vector<char> serializeRow(Row& row) {
     }
 
     return bytes;
-}
-
-template<typename T>
-std::optional<T> 
-read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_t> str_len = std::nullopt) {
-
-    if constexpr (std::is_same_v<T, std::string>) {
-        if(str_len == std::nullopt) return std::nullopt;
-        if(index + *str_len > buff.size()) return std::nullopt;
-        T value;
-        value.resize(*str_len);
-        std::memcpy(value.data(), buff.data() + index, *str_len);
-        index += *str_len;
-        return value;
-    } else {
-        if(index + sizeof(T) > buff.size()) return std::nullopt; 
-        T value;
-        std::memcpy(&value, buff.data() + index, sizeof(T));
-        index += sizeof(T);
-        return value;
-    }
 }
 
 std::optional<Row>
@@ -969,116 +1112,7 @@ bool loadRow(std::ifstream& file, Row& row, std::vector<DataType> types) {
  * 4. Make SURE that if the row has a Primary Key that UPDATE will not auto incriment when inserting
  */
 int main() {
-    /*
-    Row row1;
-    row1.add_entry(static_cast<DataType>(1), 29);
-    row1.add_entry(static_cast<DataType>(2), "Monday");
-    row1.add_entry(static_cast<DataType>(3), 20.4);
-
-    Row row2;
-    row2.add_entry(static_cast<DataType>(1), 100);
-    row2.add_entry(static_cast<DataType>(2), "Tuesday");
-    row2.add_entry(static_cast<DataType>(3), 120.4);
-
-    Row row3;
-    row3.add_entry(static_cast<DataType>(1), 5000);
-    row3.add_entry(static_cast<DataType>(2), "Wensday");
-    row3.add_entry(static_cast<DataType>(3), 12.4556);
-
-    Row row4;
-    row4.add_entry(static_cast<DataType>(1), 26);
-    row4.add_entry(static_cast<DataType>(2), "Thursday");
-    row4.add_entry(static_cast<DataType>(3), 20.4);
-
-    Row row5;
-    row5.add_entry(static_cast<DataType>(1), 100);
-    row5.add_entry(static_cast<DataType>(2), "Friday");
-    row5.add_entry(static_cast<DataType>(3), 120.4);
-
-    Row row6;
-    row6.add_entry(static_cast<DataType>(1), 5000);
-    row6.add_entry(static_cast<DataType>(2), "Saturday");
-    row6.add_entry(static_cast<DataType>(3), 12.4556);
-
-    Row row7;
-    row7.add_entry(static_cast<DataType>(1), 26);
-    row7.add_entry(static_cast<DataType>(2), "Sunday");
-    row7.add_entry(static_cast<DataType>(3), 20.4);
-
-    Row row8;
-    row8.add_entry(static_cast<DataType>(1), 100);
-    row8.add_entry(static_cast<DataType>(2), "Monday Funday");
-    row8.add_entry(static_cast<DataType>(3), 120.4);
-
-    Row row9;
-    row9.add_entry(static_cast<DataType>(1), 5000);
-    row9.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
-    row9.add_entry(static_cast<DataType>(3), 12.4556);
-
-
-    PageHeader header;
-    Page page;
-    header.id = 0;
-    page.header = header;
-
-    PageHeader header2;
-    Page page2;
-    header2.id = 1;
-    page2.header = header2;
-
-    PageHeader header3;
-    Page page3;
-    header3.id = 2;
-    page3.header = header3;
-
-    RecordHeader RH;
-    RH.PAGECOUNT = 3;
-
-
-    if(!INSERT(page, row1)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    if(!INSERT(page, row2)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    if(!INSERT(page, row3)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-
-
-
-    if(!INSERT(page2, row4)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    if(!INSERT(page2, row5)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    if(!INSERT(page2, row6)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-
-
-
-    if(!INSERT(page3, row7)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    if(!INSERT(page3, row8)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    if(!INSERT(page3, row9)) {
-        std::cerr << "failed to insert\n";
-        return 1;
-    }
-    */
-    //std::fstream file1("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
+/*
     RecordHeader globalHeader{0x44415441, 4};
     globalHeader.TABLEID = 1;
     //flush_metadata(file1, globalHeader);
@@ -1092,103 +1126,7 @@ int main() {
     Pager tracker;
     tracker.tableMetadata[1] = RH;
     file1.close();
-    /*
-    tracker.pages[0] = page;
-    tracker.pages[1] = page2;
-    tracker.pages[2] = page3;
 
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
-    flush_page(file, tracker.pages[0]);
-    flush_page(file, tracker.pages[1]);
-    flush_page(file, tracker.pages[2]);
-    
-
-    if(!file) {
-        std::cout << "failed to find or open file\n";
-        return 1;
-    }
-    file.close();
-    */
-
-    //RecordHeader RH;
-    //Pager pager;
-    //pager.tableMetadata["Schedules"] = RH;
-
-    /*if (!UPDATE("Schedules", tracker, {{1, "Yohan my boy wife!"}, {0, 69}, {2, 7.6}} ,1, Conditional::EQUAL, "Femboy fridays with yohan the butcher")) {
-//    if (!UPDATE("Schedules", pager, {{1, "ble"}, {0, 69}, {2, 20.4}} ,1, Conditional::EQUAL, "Monday")) {
-        std::cout << "SELECT Failed\n";
-        return 1;
-    }*/
-
-    
-    /*
-    std::fstream file2("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
-    std::cout << "Second flush: ";
-    flush_page(file2, pager.pages[2]);
-    file2.close();
-    */
-    std::vector<Row> resultSet;
-    /*
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
-    for(int i = 0; i < pager.pages.size(); i++) {
-        std::vector<ScanResult> scanResult;
-        if (!ScanAllRows(scanResult, pager.pages[i])) {
-            std::cout << "Failed to scan all rows\n";
-            return 1;
-        }
-        for (auto res : scanResult) {
-            printRow(res.row);
-        }
-    }
-    file.close();
-    */
-    /*
-    Row row10;
-    row10.add_entry(static_cast<DataType>(1), 250);
-    row10.add_entry(static_cast<DataType>(2), "Excuse me sir..");
-    row10.add_entry(static_cast<DataType>(3), 10.6);
-
-    if (!INSERT(1, tracker, row10)) {
-        std::cout << "Inserion Failed\n";
-        return 1;
-    }
-    */
-
-    /*
-    std::fstream file2("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    std::cout << "Second flush: ";
-    PageKey key = {1, 2};
-    flush_page(file2, tracker.pages[key]);
-    file2.close();
-    */
-    /*
-    std::cout << "Selecting now: \n\n";
-    if (!SELECT(resultSet, 1, tracker, 1, Conditional::EQUAL, "Yohan my boy wife!")) {
-        std::cout << "SELECT Failed\n";
-        return 1;
-    }
-
-    if(resultSet.empty()) {
-        std::cout << "Query not found\n";
-    }
-
-    for (auto result : resultSet) {
-        printRow(result);
-    }
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    
-    //Page* p = requestPage(file, tracker, {1, 0});
-    std::cout << "PageFrequency order: \n";
-    int count = 0;
-    for(auto& p : tracker.PageFrequency) {
-        std::cout << ++count << ": " << p.pageID << "\n";
-    }
-
-    if(!COMMIT(file, tracker)) {
-        std::cerr << "Failed to commit\n";
-        return 1;
-    }
-    */
 
     std::ifstream rowFile("rows.txt");
     if(!rowFile) {
@@ -1223,6 +1161,8 @@ int main() {
     COMMIT(file, tracker);
     flush_metadata(file, tracker.tableMetadata[1]);
     file.close();
+
+    std::vector<Row> resultSet;
     if (!SELECT(resultSet, 1, tracker, 1, Conditional::EQUAL, "Kirsche")) {
         std::cout << "SELECT Failed\n";
         return 1;
@@ -1235,6 +1175,32 @@ int main() {
     for (auto result : resultSet) {
         printRow(result);
     }
+*/
+
+    Row row;
+    row.add_entry(static_cast<DataType>(1), 5000);
+    row.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
+    row.add_entry(static_cast<DataType>(3), 12.4556);
+
+    Logger logger;
+    logger.start = true;
+
+    Log log = CreateLog({1, 2}, LogCMD::INSERT, 12334, row);
+
+    std::vector<char> bytes = serializeLog(log);
+    std::cout << "Log size: " << log.size() << "\n";
+    std::cout << "Bytes size: " << bytes.size() << "\n";
+
+    auto logPtr = deserializeLog(bytes);
+    if(!logPtr) {
+        return 1;
+    }
+    
+    Log newLog = *logPtr;
+    printLog(newLog);
+
+    AppendLog(logger, newLog);
+    std::cout << "logger size: " << logger.buffer.size() << "\n";
 
     std::cout << "Compiles!\n";
 
