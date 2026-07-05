@@ -226,10 +226,20 @@ struct Log {
 struct LoggerHeader {
     uint32_t MAGIC     = 0;
     uint32_t VERSION   = 0;
+    uint32_t TxCOUNT  = 0;
     uint32_t LatestCheckpointOffset = 0;
 };
 
+struct TransactionHeader {
+    uint32_t id = 0;
+    uint32_t NumLogs;
+    uint8_t  commited = 0;
+};
 struct Logger {
+    
+    LoggerHeader header;
+    TransactionHeader Txheader;
+
     bool start =    false;
     bool commited = false;
 
@@ -290,6 +300,7 @@ std::optional<Log> deserializeLog(std::span<char> logBytes) {
         std::cerr << "Failed to deserialize row when deserializing log\n";
         return std::nullopt;
     }
+
     index += rowptr->size();
 
     auto endOfLog = read_bytes<LogCMD>(logBytes, index);
@@ -311,11 +322,91 @@ std::optional<Log> deserializeLog(std::span<char> logBytes) {
     return log;
 }
 
-bool AppendLog(Logger& logger, Log& log) {
+void AppendLog(Logger& logger, Log& log) {
     assert(logger.start && !logger.commited);
 
     std::vector<char> bytes = serializeLog(log);
     logger.buffer.insert(logger.buffer.end(), bytes.data(), bytes.data() + bytes.size());
+}
+
+bool flush_logger_state(std::fstream& file, Logger& logger, LogCMD state) {
+
+    assert(state == LogCMD::START || state == LogCMD::COMMIT);
+
+    switch(state) {
+        case LogCMD::START:
+            assert(logger.start && !logger.commited);
+            break;
+        case LogCMD::COMMIT:
+            assert(logger.start && logger.commited);
+            break;
+    }
+    
+    file.seekp(0, std::ios::end);
+
+    file.write(reinterpret_cast<const char*>(&state), sizeof(state));
+    if(!file) {
+        std::cout << "Failed to flush status command to logger\n";
+        return false;
+    }
+    file.seekp(0, std::ios::beg);
+    return true;
+}
+
+bool flush_logger_checkpoint(std::fstream& file, LoggerHeader& header) {
+
+    const LogCMD checkPoint = LogCMD::CHECKPOINT;
+    file.seekp(0, std::ios::end);
+    
+    file.write(reinterpret_cast<const char*>(&checkPoint), sizeof(LogCMD));
+    if(!file) {
+        std::cout << "Failed to flush checkPoint to logger\n";
+        return false;
+    }
+
+    header.LatestCheckpointOffset = file.tellp();
+    file.seekp(0, std::ios::beg);
+    return true;
+}
+
+bool flush_logger(std::fstream& file, Logger& logger) {
+    assert(logger.commited);
+    assert(logger.start);
+    
+    file.seekp(0, std::ios::end);
+    file.write(reinterpret_cast<const char*>(&logger.Txheader), sizeof(TransactionHeader));
+    if(!file) {
+        std::cout << "Failed to flush logger Transaction Header\n";
+        return false;
+    }
+    file.write(logger.buffer.data(), logger.buffer.size());
+    if(!file) {
+        std::cout << "Failed to flush logger Log buffer\n";
+        return false;
+    }
+    file.seekp(0, std::ios::beg);
+    return true;
+}
+
+bool flush_logger_header(std::fstream& file, LoggerHeader& header) {
+    file.seekp(0, std::ios::beg);
+    file.write(reinterpret_cast<const char*>(&header), sizeof(LoggerHeader));
+    if(!file) {
+        std::cout << "Failed to flush logger Log buffer\n";
+        return false;
+    }
+    file.seekp(0, std::ios::beg);
+    return true;
+}
+
+bool load_logger_header(std::fstream& file, LoggerHeader& header) {
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(&header), sizeof(LoggerHeader));
+    if(!file) {
+        std::cout << "Failed to load loggers header\n";
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
     return true;
 }
 
@@ -341,7 +432,41 @@ void printLog(Log& log) {
     printRow(log.row);
 }
 
-bool COMMIT(std::fstream& file, Pager& pager) {
+bool START(Logger& logger) {
+    logger.start    = true;
+
+    std::fstream LoggerFile("logger.bin", std::ios::binary | std::ios::in | std::ios::out);
+    if(!load_logger_header(LoggerFile, logger.header)) {
+        return false;
+    }
+    logger.header.TxCOUNT++;
+    if(!flush_logger_state(LoggerFile, logger, LogCMD::START)) {
+        return false;
+    }
+
+    logger.file = std::move(LoggerFile);
+    return true;
+}
+
+bool COMMIT(std::fstream& file, Logger& logger, Pager& pager) {
+    
+    assert(logger.start);
+    assert(!logger.commited);
+
+    logger.commited = true;
+    if(!flush_logger(logger.file, logger)) {
+        std::cerr << "Failed to flush logger's buffer\n";
+        return false;
+    }
+    if(!flush_logger_state(logger.file, logger, LogCMD::COMMIT)) {
+        std::cerr << "Failed to flush logger's state\n";
+        return false;
+    }
+    if(!flush_logger_header(logger.file, logger.header)) {
+        std::cerr << "Failed to flush logger's header\n";
+        return false;
+    }
+
     for (auto& [key, page] : pager.pages) {
 
         if(!page.dirty) continue;
@@ -878,7 +1003,9 @@ void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset) {
     std::memcpy(buff.data() + offset, RowBytes.data(), RowBytes.size());
 }
 
-bool DELETE(uint32_t tableID, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+bool DELETE(uint32_t tableID, Pager& pager, Logger& logger, 
+            size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+
     auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
     if(!resultsPtr) {
         return false;
@@ -896,6 +1023,14 @@ bool DELETE(uint32_t tableID, Pager& pager, size_t column_index, const Condition
         }
 
         result.row.tumpstoned = 1;
+
+        const LogCMD command = LogCMD::DELETE;
+        Log Log = CreateLog({tableID, page->header.id}, command, result.offset, result.row);
+        size_t beforeSize = logger.buffer.size();
+        AppendLog(logger, Log);
+        assert(logger.buffer.size() == (beforeSize + Log.size()));
+        logger.Txheader.NumLogs++;
+
         insertRowIntoBuff(page->buffer, result.row, result.offset);
         mark_dirty(*page);
     }
@@ -908,7 +1043,8 @@ struct Set {
     std::variant<int32_t, std::string, double> value;
 };
 
-bool UPDATE(uint32_t tableID, Pager& pager, std::vector<Set> sets,
+bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
+            std::vector<Set> sets,
             size_t column_index, const Conditional conditional, 
             const std::variant<int32_t, std::string, double> value) {
 
@@ -928,40 +1064,36 @@ bool UPDATE(uint32_t tableID, Pager& pager, std::vector<Set> sets,
             return false;
         }
         result.row.tumpstoned = 1;
+
+        const LogCMD DeleteCommand = LogCMD::DELETE;
+        Log DeleteLog = CreateLog({tableID, page->header.id}, DeleteCommand, result.offset, result.row);
+        size_t beforeSize = logger.buffer.size();
+        AppendLog(logger, DeleteLog);
+        assert(logger.buffer.size() == (beforeSize + DeleteLog.size()));
+        logger.Txheader.NumLogs++;
+
         insertRowIntoBuff(page->buffer, result.row, result.offset);
         mark_dirty(*page);
         result.row.tumpstoned = 0;
-        
         
         Row& UpdatedRow = result.row;
         for (auto set : sets) {
             UpdatedRow.values[set.column_index].value = set.value;
         }
         UpdatedRow.RecalculateSize();
-        /*
-        for(int i = 0; i < result.row.values.size(); i++) {
-            Entry entry;
-        
-            auto it = sets.find(i);
-            if (it != sets.end()) {
-                entry.type  = result.row.values[i].type;
-                entry.value = sets.at(i);
-                UpdatedRow.add_entry(entry);
-            }
-            else {
-                entry.type  = result.row.values[i].type;
-                entry.value = result.row.values[i].value;
-
-                UpdatedRow.add_entry(entry);
-            }
-        }
-        */
-        //printRow(UpdatedRow);
 
         Page* PageWithSpace = requestPageWithSpace(file, pager, tableID, UpdatedRow);
         if(!PageWithSpace) {
             return false;
         }
+
+        const LogCMD InsertCommand = LogCMD::INSERT;
+        Log InsertLog = CreateLog({tableID, PageWithSpace->header.id}, InsertCommand, 
+                                  PageWithSpace->header.freespace, UpdatedRow);
+        beforeSize = logger.buffer.size();
+        AppendLog(logger, InsertLog);
+        assert(logger.buffer.size() == (beforeSize + InsertLog.size()));
+        logger.Txheader.NumLogs++;
 
         insertRowIntoBuff(PageWithSpace->buffer, UpdatedRow, PageWithSpace->header.freespace);
         PageWithSpace->header.freespace += result.row.size();
@@ -972,6 +1104,34 @@ bool UPDATE(uint32_t tableID, Pager& pager, std::vector<Set> sets,
     return true;
 }
 
+bool INSERT(uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
+
+    //!!!!!!Temporary!!!!!!
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    ///////////////////////
+
+    Page* page = requestPageWithSpace(file, pager, tableID, row);
+    if (!page) {
+        return false;
+    }
+
+    size_t insert_position = page->header.freespace;
+
+    const LogCMD command = LogCMD::INSERT;
+    Log Log = CreateLog({tableID, page->header.id}, command, insert_position, row);
+    size_t beforeSize = logger.buffer.size();
+    AppendLog(logger, Log);
+    assert(logger.buffer.size() == (beforeSize + Log.size()));
+    logger.Txheader.NumLogs++;
+
+    insertRowIntoBuff(page->buffer, row, insert_position);
+
+    page->header.freespace += row.size();
+    mark_dirty(*page);
+    page->header.NumRows += 1;
+      
+    return true;
+}
 
 void printRow(Row& row) {
     std::cout << "tumpstoned: " << row.tumpstoned << "\n";
@@ -994,73 +1154,6 @@ void printRow(Row& row) {
         }
     }
     std::cout << "------------------\n";
-}
-
-void test_serialize() {
-    Entry entry01{static_cast<DataType>(1), 26};
-    Entry entry02{static_cast<DataType>(2), "Monday"};
-    Entry entry03{static_cast<DataType>(3), 20.4};
-    Row row;
-
-    row.add_entry(static_cast<DataType>(1), 26);
-    row.add_entry(static_cast<DataType>(2), "Monday");
-    row.add_entry(static_cast<DataType>(3), 20.4);
-
-    std::vector<char> bytes = serializeRow(row);
-    std::cout << "Size of bytes: " << bytes.size() << "\n";
-    std::cout << "Size of row: " << sizeof(row) << "\n";
-    std::ofstream file("file.bin", std::ios::binary | std::ios::trunc);
-    file.write(bytes.data(), bytes.size());
-    file.close();
-    std::optional<Row> deRow = deserializeRow({bytes.begin(), bytes.end()});
-    if(!deRow) {
-        std::cerr << "Failed to deserialize Row \n";
-        return;
-    }
-    printRow(*deRow);
-}
-
-bool INSERT(uint32_t tableID, Pager& pager, Row& row) {
-
-    //!!!!!!Temporary!!!!!!
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    ///////////////////////
-
-    Page* page = requestPageWithSpace(file, pager, tableID, row);
-    if (!page) {
-        return false;
-    }
-
-    size_t insert_position = page->header.freespace;
-
-    insertRowIntoBuff(page->buffer, row, insert_position);
-
-    page->header.freespace += row.size();
-    mark_dirty(*page);
-    page->header.NumRows += 1;
-      
-    return true;
-}
-
-bool INSERT(Page& page, Row& row) {
-
-    /*
-    if(page == nullptr) {
-        auto it = tracker.pages.end();
-        tracker.pages.insert(it, create_page(tracker.latestID));
-        page = &tracker.pages.back();
-    }
-    */
-
-    size_t insert_position = page.header.freespace;
-
-    insertRowIntoBuff(page.buffer, row, insert_position);
-
-    page.header.freespace += row.size();
-    mark_dirty(page);
-    page.header.NumRows += 1;
-      
-      return true;
 }
 
 bool loadRow(std::ifstream& file, Row& row, std::vector<DataType> types) {
@@ -1112,22 +1205,40 @@ bool loadRow(std::ifstream& file, Row& row, std::vector<DataType> types) {
  * 4. Make SURE that if the row has a Primary Key that UPDATE will not auto incriment when inserting
  */
 int main() {
-/*
-    RecordHeader globalHeader{0x44415441, 4};
-    globalHeader.TABLEID = 1;
-    //flush_metadata(file1, globalHeader);
+    /*
+    Row row;
+    row.add_entry(static_cast<DataType>(1), 5000);
+    row.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
+    row.add_entry(static_cast<DataType>(3), 12.4556);
+    */
+
+    RecordHeader globalRBHeader{0x44415441, 4};
+    LoggerHeader globalLogHeader{0x44518449, 1};
+    globalRBHeader.TABLEID = 1;
+
+    std::fstream file2("logger.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
+    if (!flush_logger_header(file2, globalLogHeader)) {
+        std::cout << "Failed to flush loggers header at beggining of file\n";
+        return 1;
+    }
+    file2.close();
 
     RecordHeader RH;
     std::fstream file1("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    if (!requestRecordBankHeader(file1, globalHeader, RH, 1)) {
+    if (!requestRecordBankHeader(file1, globalRBHeader, RH, 1)) {
         std::cout << "Failed to load RecordHeader\n";
         return 1;
     }
-    Pager tracker;
-    tracker.tableMetadata[1] = RH;
+    Pager pager;
+    Logger logger;
+    pager.tableMetadata[1] = RH;
     file1.close();
 
-
+    if(!START(logger)){
+        std::cout << "Failed to start Transaction\n";
+        return 1;
+    };
+  
     std::ifstream rowFile("rows.txt");
     if(!rowFile) {
         std::cout << "File not found\n";
@@ -1139,68 +1250,62 @@ int main() {
         std::cout << "------------------------\n";
         std::cout << "iteration: " << ++count << "\n";
         Row lrow; 
+        std::cout << "its this function\n";
         if(!loadRow(rowFile, lrow, {{DataType::INTEIRO, DataType::TEXTO, DataType::REAL}})){
             std::cout << "end of file\n";
             break;
         };
+        std::cout << "never mind\n";
         size += lrow.size();
 
         //printRow(lrow);
         std::cout << "Inserting: \n"; 
-        if (!INSERT(1, tracker, lrow)) {
+        if (!INSERT(1, pager, logger, lrow)) {
             std::cout << "Inserion Failed\n";
             return 1;
         }
         std::cout << "Buff size: " << size << "/" << PAGE_SIZE << "\n";
         
-        std::cout << "Loaded pages: " << tracker.pages.size() << "\n";
+        std::cout << "Loaded pages: " << pager.pages.size() << "\n";
 
+    }
+    if (!UPDATE(1, pager, logger, {{0, 69}, {1, "femboyYohan"}}, 1, Conditional::EQUAL, "Yohan")) {
+        std::cout << "Update Failed\n";
+        return 1;
+    }
+    if (!UPDATE(1, pager, logger, {{0, 67}, {1, "Foxu"}}, 1, Conditional::EQUAL, "Kirsche")) {
+        std::cout << "Update Failed\n";
+        return 1;
+    }
+    if (!DELETE(1, pager, logger, 1, Conditional::EQUAL, "E;R")) {
+        std::cout << "DELETE Failed\n";
+        return 1;
+    }
+    if (!UPDATE(1, pager, logger, {{0, 67}, {1, "Foxu"}}, 1, Conditional::EQUAL, "Kirsche")) {
+        std::cout << "Update Failed\n";
+        return 1;
     }
 
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    COMMIT(file, tracker);
-    flush_metadata(file, tracker.tableMetadata[1]);
+    COMMIT(file, logger, pager);
+    flush_metadata(file, pager.tableMetadata[1]);
     file.close();
 
-    std::vector<Row> resultSet;
-    if (!SELECT(resultSet, 1, tracker, 1, Conditional::EQUAL, "Kirsche")) {
-        std::cout << "SELECT Failed\n";
-        return 1;
+    auto cursor = logger.buffer.begin();
+    for(int i = 0; i < logger.Txheader.NumLogs; i++) {
+        std::span bytes = {cursor, logger.buffer.end()};
+        
+        auto logPtr = deserializeLog(bytes);
+        if(!logPtr) {
+            return 1;
+        }
+        cursor += logPtr->size();
+        
+        Log newLog = *logPtr;
+        printLog(newLog);
     }
 
-    if(resultSet.empty()) {
-        std::cout << "Query not found\n";
-    }
 
-    for (auto result : resultSet) {
-        printRow(result);
-    }
-*/
-
-    Row row;
-    row.add_entry(static_cast<DataType>(1), 5000);
-    row.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
-    row.add_entry(static_cast<DataType>(3), 12.4556);
-
-    Logger logger;
-    logger.start = true;
-
-    Log log = CreateLog({1, 2}, LogCMD::INSERT, 12334, row);
-
-    std::vector<char> bytes = serializeLog(log);
-    std::cout << "Log size: " << log.size() << "\n";
-    std::cout << "Bytes size: " << bytes.size() << "\n";
-
-    auto logPtr = deserializeLog(bytes);
-    if(!logPtr) {
-        return 1;
-    }
-    
-    Log newLog = *logPtr;
-    printLog(newLog);
-
-    AppendLog(logger, newLog);
-    std::cout << "logger size: " << logger.buffer.size() << "\n";
 
     std::cout << "Compiles!\n";
 
