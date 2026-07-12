@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstddef> 
 #include <optional>
 #include <cassert>
@@ -15,7 +16,8 @@
 
 const int KILOBYTE = 1024;
 constexpr int PAGE_SIZE = KILOBYTE; 
-const int MAXPAGES = 3;
+const int MAXPAGES = 100;
+
 
 enum class DataType : uint32_t {
     INTEIRO = 1, //int
@@ -133,6 +135,7 @@ struct Pager {
 void mark_clean(Page& page);
 void mark_dirty(Page& page);
 bool flush_page(std::fstream& file, const Page& page);
+bool flush_metadata(std::fstream& file, RecordHeader header);
 std::vector<char> serializeRow(Row& row);
 
 template<typename T>
@@ -157,9 +160,12 @@ read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_
 }
 
 Page* requestPage(std::fstream& file, Pager& pager, PageKey ID);
+Page create_page(uint32_t id);
 void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset);
 void eraseRowFromBuff(std::vector<char>& buff, Row& row, size_t offset);
 std::optional<Row> deserializeRow(std::span<const char> rowBytes);
+uint32_t count_pages(std::fstream& file);
+bool load_RecordBank_header(std::fstream& file, RecordHeader& header, uint32_t tableID);
 
 bool updatePageFrequency(Pager& pager, PageKey ID) {
     
@@ -191,6 +197,7 @@ bool evictPage(std::fstream& file, Pager& pager) {
     Page* page = &pager.pages.at(key);
 
     if(page->dirty) {
+        std::cout << "flushing page: " << key.pageID << " When evicting\n";
         if(!flush_page(file, *page)) {
             std::cerr << "Failed to flush page when evicting it\n";
             return false;
@@ -217,12 +224,13 @@ enum class LogCMD : int32_t {
 struct Log {
     PageKey ID;
     LogCMD command;
+    PageHeader pageHeader;
     uint32_t offset;
     Row row;
     const LogCMD endOfLog = LogCMD::ENDOFLOG;
 
     size_t size() {
-        return sizeof(PageKey) + sizeof(command) + sizeof(offset) + row.size() + sizeof(endOfLog);
+        return sizeof(PageKey) + sizeof(command) + sizeof(PageHeader) + sizeof(offset) + row.size() + sizeof(endOfLog);
     }
 };
 
@@ -236,6 +244,7 @@ struct LoggerHeader {
 struct TransactionHeader {
     uint32_t id = 0;
     uint32_t NumLogs = 0;
+    uint32_t TxSIZE = 0;
     bool commited = false;
 };
 struct Logger {
@@ -249,9 +258,9 @@ struct Logger {
     std::vector<char> buffer;
 };
 
-Log CreateLog(const PageKey ID, const LogCMD cmd, const uint32_t offset, const Row& row) {
+Log CreateLog(const PageKey ID, const LogCMD cmd, const PageHeader Pheader, const uint32_t offset, const Row& row) {
     assert(cmd == LogCMD::INSERT || cmd == LogCMD::DELETE);
-    return Log{ID, cmd, offset, row};
+    return Log{ID, cmd, Pheader, offset, row};
 }
 
 std::vector<char> serializeLog(Log& log) {
@@ -264,6 +273,9 @@ std::vector<char> serializeLog(Log& log) {
     LogCMD command = log.command;
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&command), reinterpret_cast<const char*>(&command) + sizeof(command));
 
+    PageHeader pageHeader = log.pageHeader;
+    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&pageHeader), reinterpret_cast<const char*>(&pageHeader) + sizeof(pageHeader));
+
     uint32_t offset = log.offset;
     Row row = log.row;
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&offset), reinterpret_cast<const char*>(&offset) + sizeof(offset));
@@ -275,6 +287,7 @@ std::vector<char> serializeLog(Log& log) {
 
     return bytes;
 }
+
 std::optional<Log> deserializeLog(std::span<const char> logBytes) {
     Log log;
     size_t index = 0;
@@ -287,6 +300,12 @@ std::optional<Log> deserializeLog(std::span<const char> logBytes) {
     
     auto command = read_bytes<LogCMD>(logBytes, index);
     if(!command) {
+        std::cerr << "Failed to deserialize command when deserializing log\n";
+        return std::nullopt;
+    }
+
+    auto PHeader = read_bytes<PageHeader>(logBytes, index);
+    if(!PHeader) {
         std::cerr << "Failed to deserialize command when deserializing log\n";
         return std::nullopt;
     }
@@ -318,6 +337,7 @@ std::optional<Log> deserializeLog(std::span<const char> logBytes) {
 
     log.ID = *ID;
     log.command = *command;
+    log.pageHeader = *PHeader;
     log.offset = *offset;
     log.row = *rowptr;
 
@@ -329,6 +349,8 @@ void AppendLog(Logger& logger, Log& log) {
 
     std::vector<char> bytes = serializeLog(log);
     logger.buffer.insert(logger.buffer.end(), bytes.data(), bytes.data() + bytes.size());
+
+    logger.Txheader.TxSIZE += log.size();
 }
 
 bool flush_logger_state(std::fstream& file, Logger& logger, LogCMD state) {
@@ -374,6 +396,10 @@ bool flush_logger_checkpoint(std::fstream& file, LoggerHeader& header) {
     file.seekp(0, std::ios::end);
     
     file.write(reinterpret_cast<const char*>(&checkPoint), sizeof(LogCMD));
+    //Temporary:
+    //std::string s = "CHECKPOINT";
+    //file.write(s.data(), s.size());
+
     if(!file) {
         std::cout << "Failed to flush checkPoint to logger\n";
         return false;
@@ -391,6 +417,7 @@ bool flush_logger(std::fstream& file, Logger& logger) {
     file.seekp(0, std::ios::end);
     file.write(reinterpret_cast<const char*>(&logger.Txheader.id), sizeof(logger.Txheader.id));
     file.write(reinterpret_cast<const char*>(&logger.Txheader.NumLogs), sizeof(logger.Txheader.NumLogs));
+    file.write(reinterpret_cast<const char*>(&logger.Txheader.TxSIZE), sizeof(logger.Txheader.TxSIZE));
 
     uint8_t commited = logger.Txheader.commited ? 1 : 0;
     file.write(reinterpret_cast<const char*>(&commited), sizeof(commited));
@@ -398,11 +425,36 @@ bool flush_logger(std::fstream& file, Logger& logger) {
         std::cout << "Failed to flush logger Transaction Header\n";
         return false;
     }
-    file.write(logger.buffer.data(), logger.buffer.size());
+
+    int32_t buffSize = logger.buffer.size();
+    file.write(reinterpret_cast<const char*>(&buffSize), sizeof(buffSize));
+    file.write(logger.buffer.data(), buffSize);
     if(!file) {
         std::cout << "Failed to flush logger Log buffer\n";
         return false;
     }
+    file.seekp(0, std::ios::beg);
+    return true;
+}
+
+bool flush_TxHeader_commited(std::fstream& file, Logger& logger, uint32_t offset) {
+    assert(logger.Txheader.commited);
+    assert(logger.start);
+
+    file.seekp(offset, std::ios::end);
+
+    file.seekp(0, std::ios::end);
+    file.write(reinterpret_cast<const char*>(&logger.Txheader.id), sizeof(logger.Txheader.id));
+    file.write(reinterpret_cast<const char*>(&logger.Txheader.NumLogs), sizeof(logger.Txheader.NumLogs));
+    file.write(reinterpret_cast<const char*>(&logger.Txheader.TxSIZE), sizeof(logger.Txheader.TxSIZE));
+
+    uint8_t commited = 1;
+    file.write(reinterpret_cast<const char*>(&commited), sizeof(commited));
+    if(!file) {
+        std::cout << "Failed to flush logger Transaction Header\n";
+        return false;
+    }
+
     file.seekp(0, std::ios::beg);
     return true;
 }
@@ -412,6 +464,7 @@ bool load_logger(std::fstream& file, uint32_t checkPointOffs, uint32_t TxId ,Log
     file.seekg(checkPointOffs, std::ios::beg);
     file.read(reinterpret_cast<char*>(&logger.Txheader.id), sizeof(logger.Txheader.id));
     file.read(reinterpret_cast<char*>(&logger.Txheader.NumLogs), sizeof(logger.Txheader.NumLogs));
+    file.read(reinterpret_cast<char*>(&logger.Txheader.TxSIZE), sizeof(logger.Txheader.TxSIZE));
 
     uint8_t commited = 0;
     file.read(reinterpret_cast<char*>(&commited), sizeof(commited));
@@ -426,7 +479,11 @@ bool load_logger(std::fstream& file, uint32_t checkPointOffs, uint32_t TxId ,Log
         return false;
     }
 
-    file.read(logger.buffer.data(), logger.buffer.size());
+    int32_t buffSize = 0;
+    file.read(reinterpret_cast<char*>(&buffSize), sizeof(buffSize));
+    logger.buffer.resize(buffSize);
+    file.read(logger.buffer.data(), buffSize);
+
     if(!file) {
         std::cout << "Failed to load logger Log buffer\n";
         return false;
@@ -480,12 +537,14 @@ void printLog(Log& log) {
 }
 
 bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
+    std::cout << "REDO\n";
     Pager pager;
 
+    std::unordered_set<uint32_t> tableIDs;
     auto cursor = buff.begin();
     for(size_t i = 0; i < NumLogs; i++) {
         std::span bytes = {cursor, buff.end()};
-        
+ 
         auto logPtr = deserializeLog(bytes);
         if(!logPtr) {
             std::cerr << "Failed to deserialize Log when REDO ing\n";
@@ -496,11 +555,15 @@ bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
 
         Page* page = requestPage(file, pager, log.ID);
         if(!page) {
-          std::cerr << "Failed to request page when REDO ing\n";
-            return false;
+            std::cerr << "Repairing page\n";
+            Page newPage = create_page(log.ID.pageID);
+            pager.pages.insert({log.ID, newPage});
+            page = &pager.pages.at(log.ID);
         }
+        page->header = log.pageHeader;
+        tableIDs.insert(log.ID.tableID);
         //Temporary
-        log.row.add_entry(DataType::TEXTO, "Page redone successfully");
+        //log.row.add_entry(DataType::TEXTO, "Page redone successfully");
         insertRowIntoBuff(page->buffer, log.row, log.offset);
     }
     for (auto& [key, page] : pager.pages) {
@@ -509,10 +572,25 @@ bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
             return false;
         };
     }
+
+    for (const auto& tableID : tableIDs) {
+        RecordHeader this_header;
+        if(!load_RecordBank_header(file, this_header, tableID)) {
+            std::cout << "Failed to load metadata while Repairing header\n";
+            return false;
+        };
+        this_header.PAGECOUNT = count_pages(file);
+        if(!flush_metadata(file, this_header)) {
+            std::cout << "Failed to flush repaired metadata while Repairing header\n";
+            return false;
+        }
+    }
+
     return true;
 }
 
 bool UNDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
+    std::cout << "UNDO\n";
     Pager pager;
   
     std::vector<Log> logs;
@@ -523,7 +601,7 @@ bool UNDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
         
         auto logPtr = deserializeLog(bytes);
         if(!logPtr) {
-            std::cerr << "Failed to deserialize Log when REDO ing\n";
+            std::cerr << "Failed to deserialize Log when UNDO ing\n";
             return 1;
         }
         cursor += logPtr->size();
@@ -534,9 +612,10 @@ bool UNDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
 
         Page* page = requestPage(file, pager, log->ID);
         if(!page) {
-          std::cerr << "Failed to request page when REDO ing\n";
-            return false;
+            std::cout << log->ID.pageID << ": Page ignored\n";
+            continue;
         }
+        std::cout << log->ID.pageID << ": Page found\n";
 
         if (log->command == LogCMD::INSERT) {
             eraseRowFromBuff(page->buffer, log->row, log->offset);
@@ -549,6 +628,7 @@ bool UNDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
         }
     }
     for (auto& [key, page] : pager.pages) {
+
         if(!flush_page(file, page)) {
             std::cerr << "failed to flush page: " << page.header.id << "\n";
             return false;
@@ -587,18 +667,21 @@ bool SYNC() {
     
     assert(logger.header.TxCOUNT > 0);
 
-    uint32_t TxId = logger.header.TxCOUNT - 0;
+    //std::cout << "TxCOUNT: " << logger.header.TxCOUNT << "\n";
+    uint32_t TxId = logger.header.TxCOUNT - 1;
+    //std::cout << "TxId: " << TxId << "\n";
     if(!load_logger(LogFile, checkPointOffs, TxId, logger)) {
         return false;
     }
 
+    std::cout << "logger.buffer.size(): " << logger.buffer.size() << "\n";
     if(logger.Txheader.commited) {
-        if(!REDO(LogFile, logger.Txheader.NumLogs, logger.buffer)) {
+        if(!REDO(DataFile, logger.Txheader.NumLogs, logger.buffer)) {
             return false;
         };
     }
     else {
-        if(!UNDO(LogFile, logger.Txheader.NumLogs, logger.buffer)) {
+        if(!UNDO(DataFile, logger.Txheader.NumLogs, logger.buffer)) {
             return false;
         };
     }
@@ -606,12 +689,15 @@ bool SYNC() {
     if(!flush_logger_checkpoint(LogFile, logger.header)){
         return false;
     };
+    if(!flush_logger_header(LogFile, logger.header)) {
+        return false;
+    }
 
     return true;
 }
 
 bool START(Logger& logger) {
-    logger.start    = true;
+    logger.start = true;
 
     std::fstream LoggerFile("logger.bin", std::ios::binary | std::ios::in | std::ios::out);
     if(!load_logger_header(LoggerFile, logger.header)) {
@@ -625,6 +711,7 @@ bool START(Logger& logger) {
     }
 
     logger.file = std::move(LoggerFile);
+
     return true;
 }
 
@@ -632,23 +719,39 @@ bool COMMIT(std::fstream& file, Logger& logger, Pager& pager) {
     
     assert(logger.start);
     assert(!logger.Txheader.commited);
+    
+    //Simulated crash
+    //return false;
 
+    //std::cout << "logger.buffer.size(): " << logger.buffer.size() << "\n";
+
+    if(!flush_logger_header(logger.file, logger.header)) {
+        std::cerr << "Failed to flush logger's header\n";
+        return false;
+    }
     logger.Txheader.commited = true;
     if(!flush_logger(logger.file, logger)) {
         std::cerr << "Failed to flush logger's buffer\n";
         return false;
     }
+
+    /*
+    uint32_t Txheader_offset = logger.buffer.size();
+    if(!flush_TxHeader_commited(logger.file, logger, Txheader_offset)) {
+        std::cerr << "Failed to flush commited to TransactionHeader\n";
+        return false;
+    }
+    */
+    //return false;
+
     if(!flush_logger_state(logger.file, logger, LogCMD::COMMIT)) {
         std::cerr << "Failed to flush logger's state\n";
         return false;
     }
-    if(!flush_logger_header(logger.file, logger.header)) {
-        std::cerr << "Failed to flush logger's header\n";
-        return false;
-    }
-
+    int count = 0;
     for (auto& [key, page] : pager.pages) {
-
+        //if (count == 2) return false;
+        count++;
         if(!page.dirty) continue;
 
         if(!flush_page(file, page)) {
@@ -657,6 +760,9 @@ bool COMMIT(std::fstream& file, Logger& logger, Pager& pager) {
         };
         mark_clean(page);
     }
+
+    //Temporary
+    flush_metadata(file, pager.tableMetadata[1]);
     return true;
 }
 
@@ -742,19 +848,19 @@ bool load_RecordBank_header(std::fstream& file, RecordHeader& header, uint32_t t
     return true;
 }
 
-int64_t count_pages(std::fstream& file) {
+uint32_t count_pages(std::fstream& file) {
     file.seekg(0, std::ios::end);
-    int64_t EndOfFile = file.tellg();
+    uint32_t EndOfFile = file.tellg();
     
-    int64_t file_size = EndOfFile - sizeof(RecordHeader);
+    uint32_t file_size = EndOfFile - sizeof(RecordHeader);
 
-    int64_t page_count = (file_size / (PAGE_SIZE + sizeof(PageHeader)));
+    uint32_t page_count = (file_size / (PAGE_SIZE + sizeof(PageHeader)));
     file.seekg(0, std::ios::beg);
 
     return page_count;
 }
 
-bool validate_RecordBank_header(RecordHeader& globalHeader, RecordHeader& this_Header, int64_t numPages) {
+bool validate_RecordBank_header(RecordHeader& globalHeader, RecordHeader& this_Header, uint32_t numPages) {
     if(this_Header.MAGIC != globalHeader.MAGIC) {
         std::cerr << "File has invalid MAGIC" << std::endl;
         return false;
@@ -779,7 +885,7 @@ bool requestRecordBankHeader(std::fstream& file, RecordHeader& globalHeader, Rec
     };
     std::cout << "header id : " << this_header.TABLEID <<"\n";
   
-    int64_t pageCount = count_pages(file);
+    uint32_t pageCount = count_pages(file);
 
     if(!validate_RecordBank_header(globalHeader, this_header, pageCount)) {
         return false;
@@ -831,8 +937,6 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
     if (it == pager.pages.end()) {
         auto loadedPage = load_page(file, ID.pageID);
         if(!loadedPage) {
-            //std::cerr << "Failed to load page of ID: \n";
-            //printPageKey(ID);
             return page;
         }
         std::cout << "Page: " << ID.pageID << " Loaded\n";
@@ -1210,7 +1314,7 @@ bool DELETE(uint32_t tableID, Pager& pager, Logger& logger,
         result.row.tumpstoned = 1;
 
         const LogCMD command = LogCMD::DELETE;
-        Log Log = CreateLog({tableID, page->header.id}, command, result.offset, result.row);
+        Log Log = CreateLog({tableID, page->header.id}, command, page->header, result.offset, result.row);
         size_t beforeSize = logger.buffer.size();
         AppendLog(logger, Log);
         assert(logger.buffer.size() == (beforeSize + Log.size()));
@@ -1251,7 +1355,7 @@ bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
         result.row.tumpstoned = 1;
 
         const LogCMD DeleteCommand = LogCMD::DELETE;
-        Log DeleteLog = CreateLog({tableID, page->header.id}, DeleteCommand, result.offset, result.row);
+        Log DeleteLog = CreateLog({tableID, page->header.id}, DeleteCommand,  page->header, result.offset, result.row);
         size_t beforeSize = logger.buffer.size();
         AppendLog(logger, DeleteLog);
         assert(logger.buffer.size() == (beforeSize + DeleteLog.size()));
@@ -1272,17 +1376,20 @@ bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
             return false;
         }
 
+        size_t insert_position = PageWithSpace->header.freespace;
+
+        PageWithSpace->header.freespace += UpdatedRow.size();
+        PageWithSpace->header.NumRows++;
+
         const LogCMD InsertCommand = LogCMD::INSERT;
         Log InsertLog = CreateLog({tableID, PageWithSpace->header.id}, InsertCommand, 
-                                  PageWithSpace->header.freespace, UpdatedRow);
+                                   PageWithSpace->header, insert_position, UpdatedRow);
         beforeSize = logger.buffer.size();
         AppendLog(logger, InsertLog);
         assert(logger.buffer.size() == (beforeSize + InsertLog.size()));
         logger.Txheader.NumLogs++;
 
-        insertRowIntoBuff(PageWithSpace->buffer, UpdatedRow, PageWithSpace->header.freespace);
-        PageWithSpace->header.freespace += result.row.size();
-        PageWithSpace->header.NumRows++;
+        insertRowIntoBuff(PageWithSpace->buffer, UpdatedRow, insert_position);
         mark_dirty(*PageWithSpace);
     }
     
@@ -1302,8 +1409,11 @@ bool INSERT(uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
 
     size_t insert_position = page->header.freespace;
 
+    page->header.freespace += row.size();
+    page->header.NumRows += 1;
+
     const LogCMD command = LogCMD::INSERT;
-    Log Log = CreateLog({tableID, page->header.id}, command, insert_position, row);
+    Log Log = CreateLog({tableID, page->header.id}, command, page->header, insert_position, row);
     size_t beforeSize = logger.buffer.size();
     AppendLog(logger, Log);
     assert(logger.buffer.size() == (beforeSize + Log.size()));
@@ -1311,9 +1421,7 @@ bool INSERT(uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
 
     insertRowIntoBuff(page->buffer, row, insert_position);
 
-    page->header.freespace += row.size();
     mark_dirty(*page);
-    page->header.NumRows += 1;
       
     return true;
 }
@@ -1396,17 +1504,17 @@ int main() {
     row.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
     row.add_entry(static_cast<DataType>(3), 12.4556);
     */
-
     RecordHeader globalRBHeader{0x44415441, 4};
     LoggerHeader globalLogHeader{0x44518449, 1};
     globalRBHeader.TABLEID = 1;
-
+    /*
     std::fstream file2("logger.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
     if (!flush_logger_header(file2, globalLogHeader)) {
         std::cout << "Failed to flush loggers header at beggining of file\n";
         return 1;
     }
     file2.close();
+    */
     /*
     std::fstream file1("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
     if (!flush_metadata(file1, globalRBHeader)) {
@@ -1416,6 +1524,12 @@ int main() {
     
     file1.close();
     */
+
+
+    if(!SYNC()) {
+        std::cerr << "Failed to SYNC DB\n";
+        return 1;
+    }
 
     RecordHeader RH;
     std::fstream file4("data.bin", std::ios::binary | std::ios::out | std::ios::in);
@@ -1432,15 +1546,15 @@ int main() {
         std::cout << "Failed to start Transaction\n";
         return 1;
     };
-  
-    std::ifstream rowFile("rows.txt");
+
+    /*
+    std::ifstream rowFile("rows2.txt");
     if(!rowFile) {
         std::cout << "File not found\n";
         return 1;
     }
     int count = 0;
     int size = 0;
-    /*
     while(true) {
         //std::cout << "------------------------\n";
         //std::cout << "iteration: " << ++count << "\n";
@@ -1481,11 +1595,10 @@ int main() {
         std::cout << "Update Failed\n";
         return 1;
     }
-
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     COMMIT(file, logger, pager);
-    flush_metadata(file, pager.tableMetadata[1]);
     file.close();
+    /*
     std::fstream DataFile("data.bin", std::ios::binary | std::ios::out | std::ios::in);
 
     pager.pages.erase({1, 0});
@@ -1518,6 +1631,7 @@ int main() {
     }
 
     DataFile.close();
+    */
     std::cout << "Compiles!\n";
 
 }
