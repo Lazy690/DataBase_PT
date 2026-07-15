@@ -13,10 +13,11 @@
 #include <cstring>
 #include <span>
 #include <list>
+#include <filesystem>
 
 const int KILOBYTE = 1024;
 constexpr int PAGE_SIZE = KILOBYTE; 
-const int MAXPAGES = 100;
+const int MAXPAGES = 4;
 
 
 enum class DataType : uint32_t {
@@ -97,6 +98,7 @@ struct PageHeader {
 
 struct Page {
     PageHeader header;
+    bool newAllocated = true;
     bool dirty = false;
     std::vector<char> buffer;
     Page() : buffer(PAGE_SIZE) {}
@@ -132,85 +134,6 @@ struct Pager {
     }
 };
 
-void mark_clean(Page& page);
-void mark_dirty(Page& page);
-bool flush_page(std::fstream& file, const Page& page);
-bool flush_metadata(std::fstream& file, RecordHeader header);
-std::vector<char> serializeRow(Row& row);
-
-template<typename T>
-std::optional<T> 
-read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_t> str_len = std::nullopt) {
-
-    if constexpr (std::is_same_v<T, std::string>) {
-        if(str_len == std::nullopt) return std::nullopt;
-        if(index + *str_len > buff.size()) return std::nullopt;
-        T value;
-        value.resize(*str_len);
-        std::memcpy(value.data(), buff.data() + index, *str_len);
-        index += *str_len;
-        return value;
-    } else {
-        if(index + sizeof(T) > buff.size()) return std::nullopt; 
-        T value;
-        std::memcpy(&value, buff.data() + index, sizeof(T));
-        index += sizeof(T);
-        return value;
-    }
-}
-
-Page* requestPage(std::fstream& file, Pager& pager, PageKey ID);
-Page create_page(uint32_t id);
-void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset);
-void eraseRowFromBuff(std::vector<char>& buff, Row& row, size_t offset);
-std::optional<Row> deserializeRow(std::span<const char> rowBytes);
-uint32_t count_pages(std::fstream& file);
-bool load_RecordBank_header(std::fstream& file, RecordHeader& header, uint32_t tableID);
-
-bool updatePageFrequency(Pager& pager, PageKey ID) {
-    
-    auto lookup = pager.PFIterators.find(ID);
-    if(lookup == pager.PFIterators.end()) {
-        pager.PageFrequency.push_front(ID);
-
-        auto it = pager.PageFrequency.begin();
-        pager.PFIterators.insert({ID, it});
-    }
-    else {
-        pager.PageFrequency.splice(pager.PageFrequency.begin(),
-                                   pager.PageFrequency,
-                                   pager.PFIterators.at(ID));
-    }
-    return true;
-}
-
-bool evictPage(std::fstream& file, Pager& pager) {
-    PageKey key = pager.PageFrequency.back();
-    ////////////////////
-    ///TEMPORARY!!
-    auto it = pager.pages.find(key);
-    if (it == pager.pages.end()) {
-        std::cerr << "Could not find page in pager when trying to evict it\n";
-        return false;
-    }
-
-    Page* page = &pager.pages.at(key);
-
-    if(page->dirty) {
-        std::cout << "flushing page: " << key.pageID << " When evicting\n";
-        if(!flush_page(file, *page)) {
-            std::cerr << "Failed to flush page when evicting it\n";
-            return false;
-        }
-    }
-    
-    pager.PFIterators.erase(key);
-    pager.PageFrequency.pop_back();
-    pager.pages.erase(key);
-    std::cout << "Evicting: " << key.pageID << "\n";
-    return true;
-}
-
 enum class LogCMD : int32_t {
     START      = 1,
     INSERT     = 2,
@@ -241,22 +164,134 @@ struct LoggerHeader {
     uint32_t LatestCheckpointOffset = 0;
 };
 
+struct BeforeImageHeader {
+    uint32_t MAGIC     = 0;
+    uint32_t VERSION   = 0;
+    uint32_t PAGECOUNT = 0;
+    uint32_t PADDING   = 0;
+};
+
+struct BeforeImage {
+    Page page;
+};
+
 struct TransactionHeader {
     uint32_t id = 0;
     uint32_t NumLogs = 0;
     uint32_t TxSIZE = 0;
     bool commited = false;
 };
+
 struct Logger {
     
     LoggerHeader header;
+    BeforeImageHeader beforeImageHeader;
     TransactionHeader Txheader;
 
-    bool start =    false;
+    bool start = false;
 
-    std::fstream file;
+    std::unordered_set<PageKey, PageKeyHash> flushed_beforeImages;
+    std::fstream LoggerFile;
+    std::fstream BeforeImageLogFile;
+
     std::vector<char> buffer;
 };
+
+void mark_clean(Page& page);
+void mark_dirty(Page& page);
+bool flush_page(std::fstream& file, const Page& page);
+bool flush_metadata(std::fstream& file, RecordHeader header);
+std::vector<char> serializeRow(Row& row);
+
+template<typename T>
+std::optional<T> 
+read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_t> str_len = std::nullopt) {
+
+    if constexpr (std::is_same_v<T, std::string>) {
+        if(str_len == std::nullopt) return std::nullopt;
+        if(index + *str_len > buff.size()) return std::nullopt;
+        T value;
+        value.resize(*str_len);
+        std::memcpy(value.data(), buff.data() + index, *str_len);
+        index += *str_len;
+        return value;
+    } else {
+        if(index + sizeof(T) > buff.size()) return std::nullopt; 
+        T value;
+        std::memcpy(&value, buff.data() + index, sizeof(T));
+        index += sizeof(T);
+        return value;
+    }
+}
+
+Page create_page(uint32_t id);
+void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset);
+void eraseRowFromBuff(std::vector<char>& buff, Row& row, size_t offset);
+std::optional<Row> deserializeRow(std::span<const char> rowBytes);
+uint32_t count_pages(std::fstream& file);
+bool load_RecordBank_header(std::fstream& file, RecordHeader& header, uint32_t tableID);
+bool flush_logger(std::fstream& file, Logger& logger);
+bool flush_logger_header(std::fstream& file, LoggerHeader& header);
+Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger = nullptr);
+bool flush_beforeImage_header(std::fstream& file, BeforeImageHeader& header);
+bool flush_beforeImage(std::fstream& file, BeforeImage& before);
+
+bool updatePageFrequency(Pager& pager, PageKey ID) {
+    
+    auto lookup = pager.PFIterators.find(ID);
+    if(lookup == pager.PFIterators.end()) {
+        pager.PageFrequency.push_front(ID);
+
+        auto it = pager.PageFrequency.begin();
+        pager.PFIterators.insert({ID, it});
+    }
+    else {
+        pager.PageFrequency.splice(pager.PageFrequency.begin(),
+                                   pager.PageFrequency,
+                                   pager.PFIterators.at(ID));
+    }
+    return true;
+}
+
+bool evictPage(std::fstream& file, Pager& pager, Logger* logger = nullptr) {
+    PageKey key = pager.PageFrequency.back();
+    ////////////////////
+    ///TEMPORARY!!
+    auto it = pager.pages.find(key);
+    if (it == pager.pages.end()) {
+        std::cerr << "Could not find page in pager when trying to evict it\n";
+        return false;
+    }
+
+    Page* page = &pager.pages.at(key);
+
+    if(page->dirty) {
+        if(logger != nullptr) {
+            assert(logger->LoggerFile.is_open());
+            if(!flush_logger_header(logger->LoggerFile, logger->header)) {
+                std::cerr << "Failed to flush logger's header when evicting page\n";
+                return false;
+            }
+            std::cout << "flushing logger: " << key.pageID << " When evicting\n";
+            if(!flush_logger(logger->LoggerFile, *logger)) {
+                std::cerr << "Failed to flush logger when evicting page\n";
+                return false;
+            }
+        }
+        std::cout << "flushing page: " << key.pageID << " When evicting\n";
+        if(!flush_page(file, *page)) {
+            std::cerr << "Failed to flush page when evicting it\n";
+            return false;
+        }
+    }
+    
+    pager.PFIterators.erase(key);
+    pager.PageFrequency.pop_back();
+    pager.pages.erase(key);
+    std::cout << "Evicting: " << key.pageID << "\n";
+    return true;
+}
+
 
 Log CreateLog(const PageKey ID, const LogCMD cmd, const PageHeader Pheader, const uint32_t offset, const Row& row) {
     assert(cmd == LogCMD::INSERT || cmd == LogCMD::DELETE);
@@ -352,6 +387,19 @@ void AppendLog(Logger& logger, Log& log) {
 
     logger.Txheader.TxSIZE += log.size();
 }
+bool AppendBeforeImage(Logger& logger, BeforeImage& before) {
+
+    if(!flush_beforeImage(logger.BeforeImageLogFile, before)) {
+        return false;
+    }
+
+    logger.beforeImageHeader.PAGECOUNT++;
+    if(!flush_beforeImage_header(logger.BeforeImageLogFile, logger.beforeImageHeader)) {
+        return false;
+    }
+
+    return true;
+}
 
 bool flush_logger_state(std::fstream& file, Logger& logger, LogCMD state) {
 
@@ -411,10 +459,10 @@ bool flush_logger_checkpoint(std::fstream& file, LoggerHeader& header) {
 }
 
 bool flush_logger(std::fstream& file, Logger& logger) {
-    assert(logger.Txheader.commited);
     assert(logger.start);
     
-    file.seekp(0, std::ios::end);
+    uint32_t flush_offset = logger.header.LatestCheckpointOffset + sizeof(LogCMD);
+    file.seekp(flush_offset, std::ios::beg);
     file.write(reinterpret_cast<const char*>(&logger.Txheader.id), sizeof(logger.Txheader.id));
     file.write(reinterpret_cast<const char*>(&logger.Txheader.NumLogs), sizeof(logger.Txheader.NumLogs));
     file.write(reinterpret_cast<const char*>(&logger.Txheader.TxSIZE), sizeof(logger.Txheader.TxSIZE));
@@ -514,6 +562,89 @@ bool load_logger_header(std::fstream& file, LoggerHeader& header) {
     return true;
 }
 
+bool flush_beforeImage_header(std::fstream& file, BeforeImageHeader& header) {
+    file.seekp(0, std::ios::beg);
+    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    if(!file) {
+        std::cout << "Failed to flush beforeImage header\n";
+        return false;
+    }
+    file.seekp(0, std::ios::beg);
+    return true;
+}
+
+bool load_beforeImage_header(std::fstream& file, BeforeImageHeader& header) {
+    file.seekg(0, std::ios::beg);
+    file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if(!file) {
+        std::cout << "Failed to load beforeImage header\n";
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    return true;
+}
+
+std::optional<BeforeImage>
+load_beforeImage(std::fstream& file, const uint32_t PageIndex) {
+ 
+    BeforeImage before;
+
+    size_t pageOffset = sizeof(BeforeImageHeader) + PageIndex * ( sizeof(before.page.header) + PAGE_SIZE);
+
+    std::cout << "pageOffset: " << pageOffset << "\n";
+
+    file.clear();
+    file.seekg(pageOffset);
+
+    file.read(reinterpret_cast<char*>(&before.page.header), sizeof(before.page.header));
+    std::cout << "Before Image header: " << before.page.header.id << ", "
+                                         << before.page.header.freespace << ", "
+                                         << before.page.header.NumRows << "\n";
+
+    if(!file) {
+        std::cerr << "Failed to load page header from BeforeImage file" << std::endl;
+        return std::nullopt;
+    }
+
+    const int DataBytesOffs = pageOffset + sizeof(before.page.header);
+
+    std::cout << "DataBytesOffs: " << DataBytesOffs << "\n";
+    file.clear();
+    file.seekg(DataBytesOffs, std::ios::beg);
+    std::cout << "after seek Offs: " << file.tellg() << "\n";
+
+    file.read(before.page.buffer.data(), PAGE_SIZE);
+
+    if(!file) {
+        std::cerr << "Failed to load byte buffer from BeforeImage file" << std::endl;
+        return std::nullopt;
+    }
+
+    return before;
+}
+
+bool flush_beforeImage(std::fstream& file, BeforeImage& before) {
+    
+    file.seekp(sizeof(BeforeImageHeader), std::ios::beg);
+
+    file.write(reinterpret_cast<const char*>(&before.page.header), sizeof(before.page.header));
+    if(!file) {
+        std::cerr << "Failed to flush header when flushing before image" << std::endl;
+        return false;
+    }
+
+    //file.seekp(0, std::ios::end);
+    
+    file.write(before.page.buffer.data(), PAGE_SIZE);
+
+    if(!file) {
+        std::cerr << "Failed to flush page buffer when flushing before image" << std::endl;
+        return false;
+    }
+    std::cout << "Page: " << before.page.header.id << " flushed successfully to the BeforeImage file\n";
+
+    return true;
+}
 void printLog(Log& log) {
 
     std::cout << "Log: \n";
@@ -589,48 +720,28 @@ bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
     return true;
 }
 
-bool UNDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
+bool UNDO(std::fstream& Imagefile, std::fstream& DataFile, uint32_t ImageCount, uint32_t RHPAGECOUNT) {
     std::cout << "UNDO\n";
-    Pager pager;
-  
-    std::vector<Log> logs;
+    std::vector<Page> befores;
+ 
+    for(size_t index = 0; index < ImageCount; index++) {
 
-    auto cursor = buff.begin();
-    for(size_t i = 0; i < NumLogs; i++) {
-        std::span bytes = {cursor, buff.end()};
-        
-        auto logPtr = deserializeLog(bytes);
-        if(!logPtr) {
-            std::cerr << "Failed to deserialize Log when UNDO ing\n";
-            return 1;
+        auto beforeptr = load_beforeImage(Imagefile, index);
+        if (!beforeptr) {
+            return false;
         }
-        cursor += logPtr->size();
-        logs.push_back(*logPtr);
+        BeforeImage before = *beforeptr;
+        befores.push_back(before.page);
+
     }
-    for(size_t i = logs.size(); i-- > 0;) {
-        Log* log = &logs[i];
+    uint32_t RepairedSize = sizeof(RecordHeader) + RHPAGECOUNT * (sizeof(PageHeader) + PAGE_SIZE);
+    //Temporary
+    std::filesystem::resize_file("data.bin", RepairedSize);
 
-        Page* page = requestPage(file, pager, log->ID);
-        if(!page) {
-            std::cout << log->ID.pageID << ": Page ignored\n";
-            continue;
-        }
-        std::cout << log->ID.pageID << ": Page found\n";
+    for (auto& image : befores) {
 
-        if (log->command == LogCMD::INSERT) {
-            eraseRowFromBuff(page->buffer, log->row, log->offset);
-            page->header.NumRows--;
-            continue;
-        }
-        if (log->command == LogCMD::DELETE) {
-            log->row.tumpstoned = false;
-            insertRowIntoBuff(page->buffer, log->row, log->offset);
-        }
-    }
-    for (auto& [key, page] : pager.pages) {
-
-        if(!flush_page(file, page)) {
-            std::cerr << "failed to flush page: " << page.header.id << "\n";
+        if(!flush_page(DataFile, image)) {
+            std::cerr << "failed to flush page: " << image.header.id << "\n";
             return false;
         };
     }
@@ -641,8 +752,21 @@ bool SYNC() {
     //!!!!!!Temporary!!!!!!
     std::fstream DataFile("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     std::fstream LogFile("logger.bin", std::ios::binary | std::ios::out | std::ios::in);
+    std::fstream BeforeImageLogFile("beforeImage.bin", std::ios::binary | std::ios::in | std::ios::out);
     ///////////////////////
-    
+    if (!DataFile) {
+        std::cerr << "Failed to open data.bin\n";
+        return false;
+    }
+    if (!LogFile) {
+        std::cerr << "Failed to open logger.bin\n";
+        return false;
+    }
+    if (!BeforeImageLogFile) {
+        std::cerr << "Failed to open beforeImage.bin\n";
+        return false;
+    }
+
     Logger logger;
     if(!load_logger_header(LogFile, logger.header)) {
         return false;
@@ -652,40 +776,53 @@ bool SYNC() {
         std::cout << "No logs to sync\n";
         return true;
     }
-    
-    uint32_t checkPointOffs = logger.header.LatestCheckpointOffset;
-
-    if(checkPointOffs == 0) checkPointOffs += sizeof(LoggerHeader);
-
-    LogCMD statusComand;
-    if(!load_logger_state(LogFile, checkPointOffs, statusComand)){
-        return false;
-    }
-    assert(statusComand == LogCMD::START);
-
-    checkPointOffs += sizeof(LogCMD);
-    
-    assert(logger.header.TxCOUNT > 0);
-
-    //std::cout << "TxCOUNT: " << logger.header.TxCOUNT << "\n";
-    uint32_t TxId = logger.header.TxCOUNT - 1;
-    //std::cout << "TxId: " << TxId << "\n";
-    if(!load_logger(LogFile, checkPointOffs, TxId, logger)) {
-        return false;
-    }
-
-    std::cout << "logger.buffer.size(): " << logger.buffer.size() << "\n";
     if(logger.Txheader.commited) {
+
+        uint32_t checkPointOffs = logger.header.LatestCheckpointOffset;
+
+        if(checkPointOffs == 0) checkPointOffs += sizeof(LoggerHeader);
+
+        LogCMD statusComand;
+        if(!load_logger_state(LogFile, checkPointOffs, statusComand)){
+            return false;
+        }
+        assert(statusComand == LogCMD::START);
+
+        checkPointOffs += sizeof(LogCMD);
+        
+        assert(logger.header.TxCOUNT > 0);
+
+        uint32_t TxId = logger.header.TxCOUNT - 1;
+
+        if(!load_logger(LogFile, checkPointOffs, TxId, logger)) {
+            return false;
+        }
+
         if(!REDO(DataFile, logger.Txheader.NumLogs, logger.buffer)) {
             return false;
         };
     }
     else {
-        if(!UNDO(DataFile, logger.Txheader.NumLogs, logger.buffer)) {
+
+        BeforeImageHeader beforeHeader;
+        if(!load_beforeImage_header(BeforeImageLogFile, beforeHeader)) {
+            return false;
+        }
+        RecordHeader header;
+        //the 1 is temporary
+        uint32_t tempID = 1;
+        if(!load_RecordBank_header(DataFile, header, tempID)) {
+            return false;
+        }
+
+        if(!UNDO(BeforeImageLogFile, DataFile, beforeHeader.PAGECOUNT, header.PAGECOUNT)) {
             return false;
         };
+
     }
 
+
+    std::cout << "logger.buffer.size(): " << logger.buffer.size() << "\n";
     if(!flush_logger_checkpoint(LogFile, logger.header)){
         return false;
     };
@@ -700,17 +837,28 @@ bool START(Logger& logger) {
     logger.start = true;
 
     std::fstream LoggerFile("logger.bin", std::ios::binary | std::ios::in | std::ios::out);
+    std::fstream BeforeImageLogFile("beforeImage.bin", std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+
     if(!load_logger_header(LoggerFile, logger.header)) {
         return false;
     }
     logger.header.TxCOUNT++;
     assert(logger.header.TxCOUNT > 0);
     logger.Txheader.id = logger.header.TxCOUNT - 1;
+
+    if(logger.header.LatestCheckpointOffset == 0) logger.header.LatestCheckpointOffset += sizeof(LoggerHeader);
     if(!flush_logger_state(LoggerFile, logger, LogCMD::START)) {
         return false;
     }
 
-    logger.file = std::move(LoggerFile);
+    /*
+    if(!load_beforImage_header(BeforeImageLogFile, logger.beforeImageHeader)) {
+        return false;
+    }
+    */
+
+    logger.LoggerFile = std::move(LoggerFile);
+    logger.BeforeImageLogFile = std::move(BeforeImageLogFile);
 
     return true;
 }
@@ -725,12 +873,12 @@ bool COMMIT(std::fstream& file, Logger& logger, Pager& pager) {
 
     //std::cout << "logger.buffer.size(): " << logger.buffer.size() << "\n";
 
-    if(!flush_logger_header(logger.file, logger.header)) {
+    if(!flush_logger_header(logger.LoggerFile, logger.header)) {
         std::cerr << "Failed to flush logger's header\n";
         return false;
     }
     logger.Txheader.commited = true;
-    if(!flush_logger(logger.file, logger)) {
+    if(!flush_logger(logger.LoggerFile, logger)) {
         std::cerr << "Failed to flush logger's buffer\n";
         return false;
     }
@@ -744,7 +892,7 @@ bool COMMIT(std::fstream& file, Logger& logger, Pager& pager) {
     */
     //return false;
 
-    if(!flush_logger_state(logger.file, logger, LogCMD::COMMIT)) {
+    if(!flush_logger_state(logger.LoggerFile, logger, LogCMD::COMMIT)) {
         std::cerr << "Failed to flush logger's state\n";
         return false;
     }
@@ -782,15 +930,20 @@ Page create_page(uint32_t id) {
 
 std::optional<Page>
 load_page(std::fstream& file, const int id) {
-
+    
     Page page;
 
-    int pageOffset = sizeof(RecordHeader) + id * (sizeof(PageHeader) + PAGE_SIZE);
-    file.seekg(pageOffset, std::ios::beg);
+    size_t pageOffset = sizeof(RecordHeader) + id * (sizeof(PageHeader) + PAGE_SIZE);
+    std::cout << "id: " << id << "\n";
+    std::cout << "pageOffset: " << pageOffset << "\n";
+    file.clear();        
+    file.seekg(pageOffset);
+    std::cout << "Cursor: " << file.tellg() << "\n";
     file.read(reinterpret_cast<char*>(&page.header), sizeof(PageHeader));
 
     if(!file) {
         std::cerr << "Failed to load page header" << std::endl;
+        std::cout << "Cursor: " << file.tellg() << "\n";
         return std::nullopt;
     }
     if(page.header.id != id) {
@@ -807,6 +960,8 @@ load_page(std::fstream& file, const int id) {
         std::cerr << "Failed to load byte buffer" << std::endl;
         return std::nullopt;
     }
+
+    page.newAllocated = false;
 
     return page;
 }
@@ -931,7 +1086,7 @@ Page* find_free_page(Pager& T, size_t rowSize) {
     return page;
 }
 
-Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
+Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger) {
     Page* page = nullptr;
     auto it = pager.pages.find(ID);
     if (it == pager.pages.end()) {
@@ -941,9 +1096,21 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
         }
         std::cout << "Page: " << ID.pageID << " Loaded\n";
         if(pager.pages.size() == MAXPAGES) {
-            evictPage(file, pager);
+            evictPage(file, pager, logger);
         }
+
         pager.pages.insert({ID, *loadedPage});
+
+        if(!logger->flushed_beforeImages.contains(ID)) {
+            BeforeImage before;
+            if(!loadedPage->newAllocated) {
+                before.page = *loadedPage;
+                if(!AppendBeforeImage(*logger, before)) {
+                    return page;
+                }
+            }
+            logger->flushed_beforeImages.insert(ID);
+        }
     }
     else std::cout << "Cache hit on page: " << ID.pageID << "\n";
     page = &pager.pages.at(ID);
@@ -951,7 +1118,7 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID) {
     updatePageFrequency(pager, ID);
     return page;
 }
-Page* requestPageWithSpace(std::fstream& file, Pager& pager, const uint32_t tableID, Row& row) {
+Page* requestPageWithSpace(std::fstream& file, Logger& logger, Pager& pager, const uint32_t tableID, Row& row) {
 
     Page* page = nullptr;
 
@@ -965,14 +1132,15 @@ Page* requestPageWithSpace(std::fstream& file, Pager& pager, const uint32_t tabl
     if (latestID == 0) {
        pager.tableMetadata[tableID].PAGECOUNT++;
        if(pager.pages.size() == MAXPAGES) {
-          evictPage(file, pager);
+          evictPage(file, pager, &logger);
        }
-       pager.pages.insert({{tableID, latestID}, create_page(latestID)});
+       Page newPage = create_page(latestID);
+       pager.pages.insert({{tableID, latestID}, newPage});
        page = &pager.pages.at({tableID, latestID});
     }
     else {
         latestID--;
-        page = requestPage(file, pager, {tableID, latestID});
+        page = requestPage(file, pager, {tableID, latestID}, &logger);
         if(!page) {
             return page;
         }
@@ -981,7 +1149,7 @@ Page* requestPageWithSpace(std::fstream& file, Pager& pager, const uint32_t tabl
           pager.tableMetadata[tableID].PAGECOUNT++;
           latestID++;
           if(pager.pages.size() == MAXPAGES) {
-              evictPage(file, pager);
+              evictPage(file, pager, &logger);
           }
           pager.pages.insert({{tableID, latestID}, create_page(latestID)});
           page = &pager.pages.at({tableID, latestID});
@@ -1236,7 +1404,7 @@ bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_
     return true;
 }
 std::optional<std::vector<ScanResult>>
-ScanTable(uint32_t tableID, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+ScanTable(uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
     
     std::vector<ScanResult> results;
 
@@ -1250,7 +1418,7 @@ ScanTable(uint32_t tableID, Pager& pager, size_t column_index, const Conditional
 
     for (uint32_t id = 0; id < pager.tableMetadata[tableID].PAGECOUNT; id++) {
         
-        Page* page = requestPage(file, pager, {tableID, id});
+        Page* page = requestPage(file, pager, {tableID, id}, &logger);
 
         std::vector<ScanResult> result;       
         if(!ScanPage(result, *page, column_index, conditional, value)) {
@@ -1268,8 +1436,8 @@ struct QueryParams {
     
 };
  
-bool SELECT(std::vector<Row>& resultSet, uint32_t tableID, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
-    auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
+bool SELECT(std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+    auto resultsPtr = ScanTable(tableID, logger, pager, column_index, conditional, value);
     if (!resultsPtr) {
         return false;
     }
@@ -1295,7 +1463,7 @@ void eraseRowFromBuff(std::vector<char>& buff, Row& row, size_t offset) {
 bool DELETE(uint32_t tableID, Pager& pager, Logger& logger, 
             size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
 
-    auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
+    auto resultsPtr = ScanTable(tableID, logger, pager, column_index, conditional, value);
     if(!resultsPtr) {
         return false;
     }
@@ -1306,7 +1474,7 @@ bool DELETE(uint32_t tableID, Pager& pager, Logger& logger,
     ///////////////////////
     for (auto& result : results) {
         uint32_t ID = result.pageId;
-        Page* page = requestPage(file, pager, {tableID, ID});
+        Page* page = requestPage(file, pager, {tableID, ID}, &logger);
         if (!page) {
             return false;
         }
@@ -1337,7 +1505,7 @@ bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
             size_t column_index, const Conditional conditional, 
             const std::variant<int32_t, std::string, double> value) {
 
-    auto resultsPtr = ScanTable(tableID, pager, column_index, conditional, value);
+    auto resultsPtr = ScanTable(tableID, logger, pager, column_index, conditional, value);
     if(!resultsPtr) {
         return false;
     }
@@ -1348,7 +1516,7 @@ bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
     ///////////////////////
     for (auto& result : results) {
         uint32_t ID = result.pageId;
-        Page* page = requestPage(file, pager, {tableID, ID});
+        Page* page = requestPage(file, pager, {tableID, ID}, &logger);
         if (!page) {
             return false;
         }
@@ -1371,7 +1539,7 @@ bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
         }
         UpdatedRow.RecalculateSize();
 
-        Page* PageWithSpace = requestPageWithSpace(file, pager, tableID, UpdatedRow);
+        Page* PageWithSpace = requestPageWithSpace(file, logger, pager, tableID, UpdatedRow);
         if(!PageWithSpace) {
             return false;
         }
@@ -1402,7 +1570,7 @@ bool INSERT(uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     ///////////////////////
 
-    Page* page = requestPageWithSpace(file, pager, tableID, row);
+    Page* page = requestPageWithSpace(file, logger, pager, tableID, row);
     if (!page) {
         return false;
     }
@@ -1504,9 +1672,11 @@ int main() {
     row.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
     row.add_entry(static_cast<DataType>(3), 12.4556);
     */
+
     RecordHeader globalRBHeader{0x44415441, 4};
-    LoggerHeader globalLogHeader{0x44518449, 1};
+    LoggerHeader globalLogHeader{0x44518449, 3};
     globalRBHeader.TABLEID = 1;
+
     /*
     std::fstream file2("logger.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
     if (!flush_logger_header(file2, globalLogHeader)) {
@@ -1579,6 +1749,7 @@ int main() {
 
     }
     */
+    /*
     if (!UPDATE(1, pager, logger, {{0, 69}, {1, "femboyYohan"}}, 1, Conditional::EQUAL, "Yohan")) {
         std::cout << "Update Failed\n";
         return 1;
@@ -1595,6 +1766,7 @@ int main() {
         std::cout << "Update Failed\n";
         return 1;
     }
+    */
     std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
     COMMIT(file, logger, pager);
     file.close();
