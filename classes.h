@@ -33,8 +33,7 @@ struct Column {
 };
 struct Row {
     using entry = variant<int32_t, std::string, double>; 
-    map<Column, entry> values;
-};
+    map<Column, entry> values; };
 
 /* -------------------------------------------------
  * ------     INTERPRETER CLASSES              -----
@@ -54,10 +53,7 @@ enum class Action {
     DROP,
     INSERT,
     SELECT,
-    DELETE,
-    UPDATE
-
-};
+    DELETE, UPDATE };
 
 enum class ConnType {
 
