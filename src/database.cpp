@@ -14,22 +14,27 @@
 
 namespace fs = std::filesystem;
 
+
 struct DB_Header {
     uint32_t MAGIC;
     uint32_t VERSION;
+    uint32_t ID = 0;
     uint32_t NUM_TABLES = 0; 
 };
 
 struct TB_Header {
     uint32_t MAGIC;
     uint32_t VERSION;
+    uint32_t ID = 0;
     uint32_t NUM_COLUMNS = 0;
 };
 
-struct RecordBankHeader {
+struct RecordHeader {
     uint32_t MAGIC     = 0;
     uint32_t VERSION   = 0;
+    uint32_t TABLEID   = 0;
     uint32_t PAGECOUNT = 0;
+    uint32_t LatestLSN = 0;
 };
 
 enum class DataType : uint32_t {
@@ -55,11 +60,6 @@ struct Column {
     Constraints_list constraints;  
 };
 
-struct Row { 
-    using entry = std::variant<int32_t, std::string, double>; 
-    std::vector<entry> values; 
-};
-
 struct Table {
     std::string name;
     std::vector<Column> schema;
@@ -67,22 +67,26 @@ struct Table {
 };
 
 struct DataBase {
+    using tableID = uint32_t; 
+    using tableName = std::string;
+
     std::string name;
     fs::path baseDir;
-    std::vector<std::string> table_names;
-    std::unordered_map<std::string, fs::path> paths;
-};
 
+    std::unordered_map<tableID, tableName> tableNames;
+    std::unordered_map<tableName, tableID> tableIDs;
+};
 
 DB_Header DBHEADER{0x44415641, 2};
 TB_Header TBHEADER{0x44415441, 3};
-RecordBankHeader RBHEADER{0x44415441, 3};
+RecordHeader RBHEADER{0x44415441, 5};
 
 fs::path buildPath(fs::path cwd, std::string table) {
     cwd /= table;
     return cwd;
 }
 
+/*
 bool isInVector(const std::string& value, const std::vector<std::string>& v_to_search) {
     const auto& v = v_to_search; 
     auto it = std::find(v.begin(), v.end(), value);
@@ -114,6 +118,7 @@ void printVec(const std::vector<std::string>& v) {
         std::cout << el << '\n';
     }
 }
+*/
  //These functions throws errors
 std::fstream openFile(fs::path file_path, std::string name) {
     std::fstream file(fs::path(file_path) / name, std::ios::binary | std::ios::in | std::ios::out);
@@ -302,7 +307,6 @@ bool create_data_binary(fs::path dir, RecordBankHeader header) {
     }
     return true;
 }
-
 
 std::string get_name_from_DBmetadata(std::fstream& file) {
     //always assumes the name will be right after header
@@ -522,7 +526,7 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
     return true;
 }
 
-int main() {
+int test() {
 
     std::string name = "WorkSpace";
 
