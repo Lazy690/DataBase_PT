@@ -42,6 +42,7 @@ struct Constraints_list {
 
     bool unique = false;
     bool auto_incriment = false;
+    bool indexed = false;
     bool not_null = false;
     bool primary_key = false;
     bool foreign_key = false;

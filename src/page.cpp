@@ -288,6 +288,34 @@ bool compare(T RowValue, Conditional conditional, T value) {
     return false;
 };
 
+//index Declerations
+
+struct Node {
+    PageKey id;
+    Entry entry;
+    uint32_t offset = 0;
+};
+
+struct BranchHeader {
+
+};
+
+struct Branch {
+
+};
+
+struct TreeHeader {
+
+};
+
+struct Tree {
+    //B+ tree
+};
+
+struct Indexer {
+
+};
+
 //===================================
 // RecordBank Section
 //===================================
@@ -1500,7 +1528,7 @@ struct ScanResult {
     Row row;
 };
 
-bool ScanAllRows(std::vector<ScanResult>& results, Page page) {
+bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
 
     auto cursor = page.buffer.begin();
 
@@ -1623,6 +1651,115 @@ ScanTable(uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, c
     }
 
     return results;
+
+}
+
+//===================================
+// Index Section
+//===================================
+
+Node CreateNode(PageKey id, Entry entry, uint32_t offset) {
+    assert(offset != 0);
+    assert(offset > PAGE_SIZE);
+ 
+    return {id, entry, offset};
+}
+
+std::vector<char> serializeNode(Node& node) {
+
+}
+std::vector<char> serializeBranch(Branch& branch) {
+
+}
+
+std::optional<Node>
+deserializeNode(std::span<const char> nodeBytes) {
+
+}
+
+std::optional<Node>
+deserializeBranch(std::span<const char> branchBytes) {
+
+}
+
+bool InsertIntoTree(Tree& tree, Node& node) {
+
+}
+
+bool IndexTable(Tree& tree, Pager& pager, uint32_t tableID, uint32_t column_index) {
+ 
+    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) {
+        std::cout << "Table has no pages\n";
+        return true;
+    } 
+    //!!!!!!Temporary!!!!!!
+    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
+    ///////////////////////
+
+    for (uint32_t pageid = 0; pageid < pager.tableMetadata[tableID].PAGECOUNT; pageid++) {
+ 
+        Page* page = requestPage(file, pager, {tableID, pageid});
+
+        std::vector<ScanResult> results;
+        if(!ScanAllRows(results, *page)) {
+            std::cerr << "Failed to scan table\n";
+            return false;
+        }
+ 
+        std::vector<Node> nodes;
+        for(auto result : results) {
+
+            PageKey ID      = {tableID, pageid};
+            Entry entry     = result.row.values[column_index];
+            uint32_t offset = result.offset;
+
+            Node node = CreateNode(ID, entry, offset);
+
+            if(!InsertIntoTree(tree, node)) {
+                std::cerr << "Failed to insert into B+ tree\n";
+                return false;
+            }
+        }
+    }
+}
+
+bool flsuh_branch_header() {
+
+}
+
+bool load_branch_header() {
+
+}
+
+bool flush_branch() {
+
+}
+
+bool load_branch() {
+
+} 
+
+bool flush_tree_header() {
+
+}
+
+bool load_tree_header() {
+
+}
+
+bool validate_tree_header () {
+
+}
+
+bool requestTreeHeader() {
+
+}
+
+bool flush_tree() {
+
+}
+
+bool load_tree() {
 
 }
 
@@ -1867,6 +2004,9 @@ bool INSERT(uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
     return true;
 }
 
+bool CREATE_INDEX() {
+
+}
 
 int testReco() {
 
