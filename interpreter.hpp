@@ -19,8 +19,17 @@ enum class Action {
     DROP,
     INSERT,
     SELECT,
-    DELETE, UPDATE 
+    DELETE, 
+    UPDATE 
 
+};
+enum class CREATE_TYPE {
+    CREATE_DATABASE,
+    CREATE_TABLE,
+};
+enum class DROP_TYPE {
+    DROP_DATABASE,
+    DROP_TABLE,
 };
 
 enum class ConnType {
@@ -95,7 +104,7 @@ class Where_clause {
         NodeType tail_type = NodeType::CLAUSE;
 
         Where_clause() : clause_head(nullptr), 
-                         clause_tail(nullptr),
+                        clause_tail(nullptr),
                          connector_hold(nullptr) {}
 
         void append_clause(const Comparison& c, const bool is_negated) {
@@ -175,15 +184,17 @@ struct Column_AST {
 
 struct CREATE_AST {
 
+    CREATE_TYPE type;
     bool is_overrite = true;
-    Token table;
+    Token subject;
     std::vector<Column_AST> columns;  
 
 };
 
 struct DROP_AST {
-
-    Token table;
+    
+    DROP_TYPE type;
+    Token subject;
 
 };
 

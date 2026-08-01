@@ -40,6 +40,9 @@ struct Table {
 };
 
 struct DataBase {
+
+    bool connected = false;
+
     using tableID = uint32_t; 
     using tableName = std::string;
 
@@ -62,10 +65,13 @@ bool DROP_DATABASE(std::string input_DBname);
 
 enum class CONNECTION_STATUS {
     CONNECTED,
-    NOT_EXTSTS,
+    NOT_EXISTS,
     FAILED
 };
 
+
+
 CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Header& globalDatabaseHeader, TB_Header& globalTableHeader);
-bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites = true);
+bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites);
 bool DROP_TABLE(DataBase& database, std::string table_name);
+void printDataBase(const DataBase& database);

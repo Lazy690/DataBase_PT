@@ -13,87 +13,20 @@
 #include <cstddef> 
 #include <variant>
 
+#include "../classes.h"
+#include "filesys.hpp"
+
 namespace fs = std::filesystem;
+
+DB_Header globalDBHEADERf{0x44415641, 3};
+TB_Header globalTBHEADERf{0x44415441, 4};
+RecordHeader globalRBHEADERf{0x44415441, 5};
 
 const std::string DATABASE_FILENAME   = "database.mt";
 const std::string TABLE_FILENAME      = "table.mt";
 const std::string RECORDBANK_FILENAME = "data.bin";
 
-const fs::path BASE_DIRECTORY = fs::path("..") / "..";
-
-struct DB_Header {
-    uint32_t MAGIC;
-    uint32_t VERSION;
-    uint32_t ID = 0;
-    uint32_t LatestTableID = 0;
-    uint32_t NUM_TABLES = 0; 
-};
-
-struct TB_Header {
-    uint32_t MAGIC;
-    uint32_t VERSION;
-    uint32_t ID = 0;
-    uint32_t NUM_COLUMNS = 0;
-};
-
-struct RecordHeader {
-    uint32_t MAGIC     = 0;
-    uint32_t VERSION   = 0;
-    uint32_t TABLEID   = 0;
-    uint32_t PAGECOUNT = 0;
-    uint32_t LatestLSN = 0;
-};
-
-enum class DataType : uint32_t {
-    INTEIRO = 1, //int
-    TEXTO = 2, //string
-    REAL = 3 //double
-};
-
-struct Constraints_list {
-
-    bool unique = false;
-    bool auto_incriment = false;
-    bool indexed = false;
-    bool not_null = false;
-    bool primary_key = false;
-    bool foreign_key = false;
-  
-};
-
-struct Column {
-    DataType type;
-    std::string name;
-    Constraints_list constraints;  
-};
-
-struct Table {
-    using column_index = uint32_t;
-    TB_Header header;
-    std::string name;
-    std::unordered_map<column_index, Column> schema;
-    fs::path path;
-};
-
-struct DataBase {
-    using tableID = uint32_t; 
-    using tableName = std::string;
-
-    DB_Header header;
-    std::string name;
-    fs::path baseDir;
-
-    std::unordered_map<tableName, tableID> id_lookup;
-    std::unordered_map<tableID, Table> tables;
-
-    std::unordered_set<tableID> created_tables;
-    std::unordered_set<tableID> droped_tables;
-
-};
-
-DB_Header DBHEADER{0x44415641, 3};
-TB_Header TBHEADER{0x44415441, 4};
-RecordHeader RBHEADER{0x44415441, 5};
+const fs::path BASE_DIRECTORY = fs::path("..");
 
 fs::path buildPath(fs::path cwd, std::string table) {
     cwd /= table;
@@ -641,13 +574,6 @@ bool DROP_DATABASE(std::string input_DBname) {
 
     return true;
 }
-
-enum class CONNECTION_STATUS {
-    CONNECTED,
-    NOT_EXTSTS,
-    FAILED
-};
-
 CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Header& globalDatabaseHeader, TB_Header& globalTableHeader) {
 
     std::string dbName = input_DBname + "_DB";
@@ -655,7 +581,7 @@ CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Heade
     db_path /= dbName;
 
     if(!fs::exists(db_path)) {
-        return CONNECTION_STATUS::NOT_EXTSTS;
+        return CONNECTION_STATUS::NOT_EXISTS;
     }
     
     std::fstream metafile(fs::path(db_path) / DATABASE_FILENAME, std::ios::binary | std::ios::in);
@@ -668,10 +594,12 @@ CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Heade
         return CONNECTION_STATUS::FAILED;
     }
 
+    database.connected = true;
+
     return CONNECTION_STATUS::CONNECTED;
 }
 
-bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites = true) {
+bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites) {
     
     Table table;
     table.header.MAGIC   = globalHeader.MAGIC;
@@ -736,11 +664,6 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
 }
 
 int test_fs() {
-
-    DB_Header globalDBHEADER{0x44415641, 3};
-    TB_Header globalTBHEADER{0x44415441, 4};
-    RecordHeader globalRBHEADER{0x44415441, 5};
-
     std::string name = "WorkSpace";
 
     /*
@@ -753,7 +676,7 @@ int test_fs() {
     DataBase database;
     
     
-    CONNECTION_STATUS status_code = CONNECT(name, database, globalDBHEADER, globalTBHEADER);
+    CONNECTION_STATUS status_code = CONNECT(name, database, globalDBHEADERf, globalTBHEADERf);
     if(status_code != CONNECTION_STATUS::CONNECTED) {
         std::cerr << "Failed to connect to db\n";
         return 1;
@@ -772,11 +695,11 @@ int test_fs() {
                              {DataType::INTEIRO, "isManditory", {}}
                             }};
 
-    if(!CREATE_TABLE(database, globalTBHEADER, "dudes", a)) {
+    if(!CREATE_TABLE(database, globalTBHEADERf, "dudes", a, true)) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
-    if(!CREATE_TABLE(database, globalTBHEADER, "Schedule", b)) {
+    if(!CREATE_TABLE(database, globalTBHEADERf, "Schedule", b, true)) {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
@@ -787,7 +710,7 @@ int test_fs() {
     }
     */
 
-    if(!COMMIT_DATABASE_DATA(database, globalTBHEADER, globalDBHEADER, globalRBHEADER)) {
+    if(!COMMIT_DATABASE_DATA(database, globalTBHEADERf, globalDBHEADERf, globalRBHEADERf)) {
         std::cerr << "Failed to commit changes\n";
         return 1;
     }
