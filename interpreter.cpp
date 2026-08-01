@@ -28,8 +28,17 @@ enum class Action {
     DROP,
     INSERT,
     SELECT,
-    DELETE, UPDATE 
+    DELETE, 
+    UPDATE 
 
+};
+enum class CREATE_TYPE {
+    CREATE_DATABASE,
+    CREATE_TABLE,
+};
+enum class DROP_TYPE {
+    DROP_DATABASE,
+    DROP_TABLE,
 };
 
 const std::unordered_map<std::string, Action> ACTION_MAP = {
@@ -52,6 +61,7 @@ std::unordered_set<std::string> KeyWords {
       "CREATE",
       "DROP",
       "TABLE",
+      "DATABASE",
       "IF",
       "NOT",
       "EXISTS",
@@ -89,6 +99,7 @@ std::unordered_set<std::string> Comparators {
 std::unordered_set<std::string> constraints_set {
     "UNIQUE",
     "AUTO_INCRIMENT",
+    "INDEXED",
     "NOT_NULL",
     "PRIMARY_KEY",
     "FOREIGN_KEY"
@@ -121,6 +132,7 @@ enum class Constraint {
     UNIQUE,
     AUTO_INCRIMENT,
     NOT_NULL,
+    INDEXED,
     PRIMARY_KEY,
     FOREIGN_KEY
 
@@ -244,17 +256,20 @@ struct Column_AST {
 
 };
 
+
 struct CREATE_AST {
 
+    CREATE_TYPE type;
     bool is_overrite = true;
-    Token table;
+    Token subject;
     std::vector<Column_AST> columns;  
 
 };
 
 struct DROP_AST {
-
-    Token table;
+    
+    DROP_TYPE type;
+    Token subject;
 
 };
 
@@ -292,7 +307,7 @@ struct UPDATE_AST {
 struct AbstractSyntaxTree {
     Action action;
     std::variant<CREATE_AST, 
-                 DROP_AST, 
+                 DROP_AST,
                  INSERT_AST, 
                  SELECT_AST, 
                  DELETE_AST, 
@@ -315,7 +330,7 @@ Action returnAction(std::string a) {
 DataType returnDataType(std::string t) {
     auto it = DATATYPE_MAP.find(t);
     if(it == DATATYPE_MAP.end()) {
-        throw std::runtime_error("DataTyoe not recognized as a valid");
+        throw std::runtime_error("DataType not recognized as a valid");
     }
     return DATATYPE_MAP.at(t);
 }
@@ -577,6 +592,13 @@ std::vector<Column_AST> handle_column_ast(Cursor& cursor) {
                     continue;
                 }
 
+                else if(cursor.peek() == "INDEXED") {
+                    list.indexed = true;
+                    track_constraints.insert(cursor.peek());
+                    cursor.skip();
+                    continue;
+                }
+
                 else if(cursor.peek() == "AUTO_INCRIMENT") {
                     if(col.type != DataType::INTEIRO) throw ("Non INT types cannot be assigned 'AUTO_INCIMENT' token.");
 
@@ -671,8 +693,22 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
         
             CREATE_AST create;
 
-            if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected table name after token 'CREATE'");
-            create.table = cursor.consume();
+            if(cursor.match("DATABASE")) {
+                create.type = CREATE_TYPE::CREATE_DATABASE;
+            }
+            else if(cursor.match("TABLE")) {
+                create.type = CREATE_TYPE::CREATE_TABLE;
+            }
+            else throw std::runtime_error("Expected target specification after 'CREATE' token.");
+
+            if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected table or database name after token 'CREATE'");
+            create.subject = cursor.consume();
+
+            if(create.type == CREATE_TYPE::CREATE_DATABASE) {
+                if (!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command"); 
+                AST.tree = std::move(create);
+                return AST;
+            }
             
             if(cursor.match("IF")) {
                 if(cursor.match("NOT")) {
@@ -698,8 +734,15 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             
             DROP_AST drop;
 
+            if(cursor.match("DATABASE")) {
+                drop.type = DROP_TYPE::DROP_DATABASE;
+            }
+            else if(cursor.match("TABLE")) {
+                drop.type = DROP_TYPE::DROP_TABLE;
+            }
+
             if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected table name after token 'DROP'");
-            drop.table = cursor.consume();
+            drop.subject = cursor.consume();
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
 
             AST.tree = std::move(drop);
@@ -827,6 +870,7 @@ void print_attributes(std::vector<Token> a) {
                 if(col.constraints.unique) std::cout << "UNIQUE" << std::endl;
                 if(col.constraints.auto_incriment) std::cout << "AUTO_INCRIMENT" << std::endl;
                 if(col.constraints.not_null) std::cout << "NOT_NULL" << std::endl;
+                if(col.constraints.indexed) std::cout << "INDEXED" << std::endl;
                 if(col.constraints.primary_key) std::cout << "PRIMARY_KEY" << std::endl;
                 if(col.constraints.foreign_key) std::cout << "FOREIGN_KEY" << std::endl;
                 std::cout << "-------------------------" << std::endl;
@@ -836,43 +880,69 @@ void print_attributes(std::vector<Token> a) {
 template<typename T>
 void print_AST(const T& ast) {
      
-  std::cout << "Table: " << ast.table.value << std::endl;
+    
     
     if constexpr (std::is_same_v<T, CREATE_AST>) {
+        if (ast.type == CREATE_TYPE::CREATE_DATABASE) {
+            std::cout << "Creating Database: " << ast.subject.value << "\n";
+            return;
+        }
+        else if (ast.type == CREATE_TYPE::CREATE_TABLE) {
+            std::cout << "Creating Table: " << ast.subject.value << "\n";
+        }
         print_overrite(ast.is_overrite);
         print_create_cols(ast.columns);
         return;
     }
     if constexpr (std::is_same_v<T, DROP_AST>) {
-        std::cout << "Table dropped." << std::endl;
+        if (ast.type == DROP_TYPE::DROP_DATABASE) {
+            std::cout << "Dropping Database: " << ast.subject.value << "\n";
+        }
+        else if (ast.type == DROP_TYPE::DROP_TABLE) {
+            std::cout << "Dropping Table: " << ast.subject.value << "\n";
+        }
         return;
     }
     if constexpr (std::is_same_v<T, INSERT_AST>) {
+        std::cout << "Table: " << ast.table.value << std::endl;
         print_attributes(ast.attributes);
         print_values(ast.values);
         return;
     }
     else if constexpr (std::is_same_v<T, SELECT_AST>) {
+        std::cout << "Table: " << ast.table.value << std::endl;
         print_attributes(ast.attributes);
     }
     else if constexpr (std::is_same_v<T, UPDATE_AST>) {
+        std::cout << "Table: " << ast.table.value << std::endl;
         print_set(ast.set);
     }
     
     if constexpr (std::is_same_v<T, UPDATE_AST> || std::is_same_v<T, SELECT_AST>) {
+        std::cout << "Table: " << ast.table.value << std::endl;
         if(ast.where_clauses == nullptr) return;
         std::cout << "WHERE clauses: " << std::endl;
         ast.where_clauses->print_clause();         
     }
 }
 
+bool GENERATE_AST(AbstractSyntaxTree& AST, std::string sql) {
+    try {
+        std::vector<Token> tokens = TOKENIZE(sql);
+        AST = std::move(PARSE(tokens));
+    }
+    catch (const std::runtime_error& e) {
+        std::cerr << "Syntax Error: " << e.what() << "\n";
+        return false;
+    }
+    return true;
+}
 
-int main() {
+int test_interpreter(std::string sql) {
     
-    std::string command = "SELECT * FROM Dudes WHERE name < 'Kirsche' AND age > 18";
     AbstractSyntaxTree AST;
     try {
-        std::vector<Token> tokens = TOKENIZE(command);
+        std::vector<Token> tokens = TOKENIZE(sql);
         AST = PARSE(tokens);
     }
     catch (const std::runtime_error& e) {
@@ -880,7 +950,7 @@ int main() {
         return 1;
     }
 
-    print_AST(std::get<SELECT_AST>(AST.tree));
+    print_AST(std::get<CREATE_AST>(AST.tree));
     std::cout << "compiles!\n";
     return 0;
 }

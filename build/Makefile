@@ -129,77 +129,29 @@ database/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/build
 .PHONY : database/fast
 
-database.o: database.cpp.o
-.PHONY : database.o
+execute.o: execute.cpp.o
+.PHONY : execute.o
 
 # target to build an object file
-database.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/database.cpp.o
-.PHONY : database.cpp.o
+execute.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/execute.cpp.o
+.PHONY : execute.cpp.o
 
-database.i: database.cpp.i
-.PHONY : database.i
-
-# target to preprocess a source file
-database.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/database.cpp.i
-.PHONY : database.cpp.i
-
-database.s: database.cpp.s
-.PHONY : database.s
-
-# target to generate assembly for a file
-database.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/database.cpp.s
-.PHONY : database.cpp.s
-
-executer.o: executer.cpp.o
-.PHONY : executer.o
-
-# target to build an object file
-executer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/executer.cpp.o
-.PHONY : executer.cpp.o
-
-executer.i: executer.cpp.i
-.PHONY : executer.i
+execute.i: execute.cpp.i
+.PHONY : execute.i
 
 # target to preprocess a source file
-executer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/executer.cpp.i
-.PHONY : executer.cpp.i
+execute.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/execute.cpp.i
+.PHONY : execute.cpp.i
 
-executer.s: executer.cpp.s
-.PHONY : executer.s
-
-# target to generate assembly for a file
-executer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/executer.cpp.s
-.PHONY : executer.cpp.s
-
-indexer.o: indexer.cpp.o
-.PHONY : indexer.o
-
-# target to build an object file
-indexer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/indexer.cpp.o
-.PHONY : indexer.cpp.o
-
-indexer.i: indexer.cpp.i
-.PHONY : indexer.i
-
-# target to preprocess a source file
-indexer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/indexer.cpp.i
-.PHONY : indexer.cpp.i
-
-indexer.s: indexer.cpp.s
-.PHONY : indexer.s
+execute.s: execute.cpp.s
+.PHONY : execute.s
 
 # target to generate assembly for a file
-indexer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/indexer.cpp.s
-.PHONY : indexer.cpp.s
+execute.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/execute.cpp.s
+.PHONY : execute.cpp.s
 
 interpreter.o: interpreter.cpp.o
 .PHONY : interpreter.o
@@ -225,6 +177,30 @@ interpreter.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/interpreter.cpp.s
 .PHONY : interpreter.cpp.s
 
+src/filesys.o: src/filesys.cpp.o
+.PHONY : src/filesys.o
+
+# target to build an object file
+src/filesys.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/filesys.cpp.o
+.PHONY : src/filesys.cpp.o
+
+src/filesys.i: src/filesys.cpp.i
+.PHONY : src/filesys.i
+
+# target to preprocess a source file
+src/filesys.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/filesys.cpp.i
+.PHONY : src/filesys.cpp.i
+
+src/filesys.s: src/filesys.cpp.s
+.PHONY : src/filesys.s
+
+# target to generate assembly for a file
+src/filesys.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/filesys.cpp.s
+.PHONY : src/filesys.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -234,18 +210,15 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... database"
-	@echo "... database.o"
-	@echo "... database.i"
-	@echo "... database.s"
-	@echo "... executer.o"
-	@echo "... executer.i"
-	@echo "... executer.s"
-	@echo "... indexer.o"
-	@echo "... indexer.i"
-	@echo "... indexer.s"
+	@echo "... execute.o"
+	@echo "... execute.i"
+	@echo "... execute.s"
 	@echo "... interpreter.o"
 	@echo "... interpreter.i"
 	@echo "... interpreter.s"
+	@echo "... src/filesys.o"
+	@echo "... src/filesys.i"
+	@echo "... src/filesys.s"
 .PHONY : help
 
 

@@ -6,14 +6,6 @@
 #include <variant>
 #include <memory>
 
-struct RecordHeader {
-    uint32_t MAGIC     = 0;
-    uint32_t VERSION   = 0;
-    uint32_t TABLEID   = 0;
-    uint32_t PAGECOUNT = 0;
-    uint32_t LatestLSN = 0;
-};
-
 struct IndexHeader {
     uint32_t MAGIC;
     uint32_t VERSION;

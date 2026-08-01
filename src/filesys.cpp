@@ -735,7 +735,7 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
     return true;
 }
 
-int main() {
+int test_fs() {
 
     DB_Header globalDBHEADER{0x44415641, 3};
     TB_Header globalTBHEADER{0x44415441, 4};
