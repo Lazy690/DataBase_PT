@@ -201,6 +201,30 @@ src/filesys.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/filesys.cpp.s
 .PHONY : src/filesys.cpp.s
 
+src/storage.o: src/storage.cpp.o
+.PHONY : src/storage.o
+
+# target to build an object file
+src/storage.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/storage.cpp.o
+.PHONY : src/storage.cpp.o
+
+src/storage.i: src/storage.cpp.i
+.PHONY : src/storage.i
+
+# target to preprocess a source file
+src/storage.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/storage.cpp.i
+.PHONY : src/storage.cpp.i
+
+src/storage.s: src/storage.cpp.s
+.PHONY : src/storage.s
+
+# target to generate assembly for a file
+src/storage.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/src/storage.cpp.s
+.PHONY : src/storage.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -219,6 +243,9 @@ help:
 	@echo "... src/filesys.o"
 	@echo "... src/filesys.i"
 	@echo "... src/filesys.s"
+	@echo "... src/storage.o"
+	@echo "... src/storage.i"
+	@echo "... src/storage.s"
 .PHONY : help
 
 

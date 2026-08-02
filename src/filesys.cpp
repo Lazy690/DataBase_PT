@@ -22,33 +22,11 @@ DB_Header globalDBHEADERf{0x44415641, 3};
 TB_Header globalTBHEADERf{0x44415441, 4};
 RecordHeader globalRBHEADERf{0x44415441, 5};
 
-const std::string DATABASE_FILENAME   = "database.mt";
-const std::string TABLE_FILENAME      = "table.mt";
-const std::string RECORDBANK_FILENAME = "data.bin";
 
-const fs::path BASE_DIRECTORY = fs::path("..");
 
 fs::path buildPath(fs::path cwd, std::string table) {
     cwd /= table;
     return cwd;
-}
-
-struct FileManager {
-    using tableID = uint32_t;
-    std::fstream database_file;
-    std::unordered_map<tableID, std::fstream> table_files;
-    std::unordered_map<tableID, std::fstream> recordBank_files;
-};
-
-
-void open_database_file() {
-
-}
-void open_table_file() {
-
-}
-void open_recordBank_file() {
-
 }
 
 //=======================
@@ -154,7 +132,7 @@ bool requestTableHeader(std::fstream& file, TB_Header& globalHeader, TB_Header& 
 }
 
 //RecordBank 
-bool flush_metadata(std::fstream& file, RecordHeader header) {
+bool flush_recordbank_header(std::fstream& file, RecordHeader header) {
     file.seekp(0, std::ios::beg);
     file.write(reinterpret_cast<const char*>(&header), sizeof(RecordHeader));
     if(!file) {
@@ -467,7 +445,7 @@ bool createTableFile(fs::path path, TB_Header globalHeader) {
 }
 bool createRecordBankFile(fs::path path, RecordHeader globalHeader) {
     std::fstream file(fs::path(path) / RECORDBANK_FILENAME, std::ios::binary | std::ios::out | std::ios::trunc);
-    if(!flush_metadata(file, globalHeader)) {
+    if(!flush_recordbank_header(file, globalHeader)) {
         return false;
     }
     return true;

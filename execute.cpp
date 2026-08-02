@@ -4,10 +4,22 @@
 #include <vector>
 #include "interpreter.hpp"
 #include "src/filesys.hpp"
+#include "src/storage.hpp"
 
 DB_Header globalDBHEADER{0x44415641, 3};
 TB_Header globalTBHEADER{0x44415441, 4};
 RecordHeader globalRBHEADER{0x44415441, 5};
+LoggerHeader globalLogHeader{0x44518449, 4};
+BeforeImageHeader globalImageHeader{0x75314648, 1};
+
+struct CacheManagement {
+
+    DataBase database;
+    Pager pager;
+    Logger logger;
+    FileManager manager;
+
+};
 
 std::vector<Column> ConvertToColumns(const std::vector<Column_AST>& col_asts) {
     std::vector<Column> results;
@@ -20,8 +32,48 @@ std::vector<Column> ConvertToColumns(const std::vector<Column_AST>& col_asts) {
     }
     return results;
 }
+Row ConvertToRow(const std::vector<Token>& tokens, const std::vector<DataType> types) {
+    assert(tokens.size() == types.size());
+    Row row;
 
-bool EXECUTE(DataBase& database, std::string sql) {
+    for (size_t i = 0; i < types.size(); i++) {
+        Entry entry;
+        switch(types[i]) {
+            case DataType::INTEIRO:
+                entry.type  = DataType::INTEIRO;
+                entry.value = static_cast<int32_t>(std::stoi(tokens[i].value));
+                break;
+            case DataType::TEXTO:
+                entry.type  = DataType::TEXTO;
+                entry.value = tokens[i].value;
+                break;
+            case DataType::REAL:
+                entry.type  = DataType::REAL;
+                entry.value = std::stod(tokens[i].value);
+                break;
+        }
+      row.add_entry(entry);
+    }
+
+    return row;
+}
+
+bool VerifyColumnName(const Row& row, const Constraints_list list) {
+
+    return true;
+}
+bool VerifyTypeIntegrety(const Row& row, const Constraints_list list) {
+
+    return true;
+}
+
+bool EXECUTE(CacheManagement& cache, std::string sql) {
+    
+    DataBase&     database = cache.database;
+    Pager&        pager    = cache.pager;
+    Logger&       logger   = cache.logger;
+    FileManager&  manager  = cache.manager;
+
     AbstractSyntaxTree AST;
     if(!GENERATE_AST(AST, sql)) return false;
 
@@ -91,7 +143,34 @@ bool EXECUTE(DataBase& database, std::string sql) {
         }
         case Action::INSERT: 
         {
+            INSERT_AST tree = std::get<INSERT_AST>(AST.tree);
+            if(!database.connected) {
+                std::cerr << "Cannot INSERT INTO TABLE while not connected to any DATABASE\n";
+                return false;
+            }
             
+            //Temporary: make this into a function
+            auto it = database.id_lookup.find(tree.table.value);
+            if(it == database.id_lookup.end()) {
+                std::cerr << "Table does not Exist\n";
+                return false;
+            }
+            uint32_t tableID = database.id_lookup.at(tree.table.value);
+
+            if(!loadTableFile(manager, database.tables.at(tableID))) {
+                return false;
+            }
+
+            //temporary
+            Row row = ConvertToRow(tree.values, {DataType::INTEIRO, DataType::TEXTO, DataType::REAL});
+
+            if(!INSERT(manager.files.at(tableID), tableID, pager, logger, row)) {
+                return false;
+            }
+            else {
+                std::cout << "INSERT TABLE\n";
+            }
+
             break;
         }
         case Action::SELECT: 
@@ -117,12 +196,9 @@ bool EXECUTE(DataBase& database, std::string sql) {
 
 int main() {
     
-    DataBase database;
-    if(!EXECUTE(database, "CREATE DATABASE 'Dudes'")) {
-        return 1;
-    }
+    CacheManagement cache;
 
-    CONNECTION_STATUS status = CONNECT("Dudes", database, globalDBHEADER, globalTBHEADER);
+    CONNECTION_STATUS status = CONNECT("Dudes", cache.database, globalDBHEADER, globalTBHEADER);
     if(status == CONNECTION_STATUS::FAILED) {
         std::cout << "Connection failed\n";
         return 1;
@@ -132,20 +208,16 @@ int main() {
         return 1;
     }
 
+    if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
+        return 1;
+    }
+    if(!EXECUTE(cache, "INSERT (id, name, grade) INTO cool_dudes VALUES (1, 'Kirsche', 18.5)")) {
+        return 1;
+    }
+    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
+    if(!COMMIT(cache.manager, cache.logger, cache.pager)) {
+        return 1;
+    }
 
-    if(!EXECUTE(database, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE AUTO_INCRIMENT PRIMARY_KEY, name TEXT UNIQUE INDEXED, grade DOUBLE)")) {
-        return 1;
-    }
-    if(!EXECUTE(database, "CREATE TABLE lame_dudes IF NOT EXISTS (id INT UNIQUE AUTO_INCRIMENT PRIMARY_KEY, name TEXT UNIQUE INDEXED, grade DOUBLE)")) {
-        return 1;
-    }
-    /*
-    if(!EXECUTE(database, "DROP TABLE lame_dudes")) {
-        return 1;
-    }
-    */
-
-    COMMIT_DATABASE_DATA(database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
-    printDataBase(database);
     std::cout << "Worked\n";
 }

@@ -58,7 +58,6 @@ struct DataBase {
 
 };
 
-
 bool COMMIT_DATABASE_DATA(const DataBase& database, const TB_Header& globalTableHeader, const DB_Header& globalDatabaseHeader, const RecordHeader& globalRecordHeader);
 bool CREATE_DATABASE(std::string input_DBname, DB_Header& globalHeader);
 bool DROP_DATABASE(std::string input_DBname);
@@ -69,7 +68,13 @@ enum class CONNECTION_STATUS {
     FAILED
 };
 
+const std::string DATABASE_FILENAME   = "database.mt";
+const std::string TABLE_FILENAME      = "table.mt";
+const std::string RECORDBANK_FILENAME = "data.bin";
+const std::string LOGGER_FILENAME = "logger.bin";
+const std::string BEFOREIMAGE_FILENAME = "beforeImage.bin";
 
+const fs::path BASE_DIRECTORY = fs::path("..");
 
 CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Header& globalDatabaseHeader, TB_Header& globalTableHeader);
 bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites);

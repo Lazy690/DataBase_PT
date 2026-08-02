@@ -766,6 +766,7 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             cursor.expect("(");
             insert.values = handle_parenthesis(cursor);
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
+            if(insert.attributes.size() != insert.values.size()) throw std::runtime_error("Attributes and value counts do not corelate");
             AST.tree = std::move(insert);
             }
             break;

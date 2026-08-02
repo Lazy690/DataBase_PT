@@ -15,13 +15,10 @@
 #include <list>
 #include <filesystem>
 
-#include "../classes.h"
-#include "filesys.hpp";
-#include "storage.hpp";
+#include "classes.h"
+#include "filesys.hpp"
+#include "storage.hpp"
 
-const int KILOBYTE = 1024;
-constexpr int PAGE_SIZE = KILOBYTE; 
-const int MAXPAGES = 100;
 
 
 //===================================
@@ -131,9 +128,9 @@ struct Indexer {
 // File Section
 //===================================
 
-std::fstream openFile(const std::filesystem::path path) {
-    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
-    assert(file.is_open);
+std::fstream openFile(const std::filesystem::path path, std::string fileName) {
+    std::fstream file(std::filesystem::path(path) / fileName, std::ios::binary | std::ios::in | std::ios::out);
+    assert(file.is_open());
     return file;
 }
 
@@ -142,8 +139,21 @@ bool loadTableFile(FileManager& manager, const Table& table) {
     auto it = manager.files.find(table.header.ID);
     if(it != manager.files.end()) return true; 
     std::filesystem::path filePath = table.path;
-    manager.files[table.header.ID] = std::move(openFile(path));
+    manager.files[table.header.ID] = std::move(openFile(filePath, RECORDBANK_FILENAME));
     if(!manager.files[table.header.ID]) {
+        std::cerr << "Table file not found\n";
+        return false;
+    }
+    return true;
+ 
+}
+
+bool loadTableFile(FileManager& manager, const uint32_t& tableID, std::filesystem::path filePath) {
+ 
+    auto it = manager.files.find(tableID);
+    if(it != manager.files.end()) return true; 
+    manager.files[tableID] = std::move(openFile(filePath, RECORDBANK_FILENAME));
+    if(!manager.files[tableID]) {
         std::cerr << "Table file not found\n";
         return false;
     }
@@ -219,11 +229,11 @@ bool requestRecordBankHeader(std::fstream& file, RecordHeader& globalHeader, Rec
 
 bool loadTableMetadata(FileManager& manager, Pager& pager, RecordHeader& globalRBHeader, const Table& table) {
 
-    using id = table.header.ID;
+    uint32_t id = table.header.ID;
     if(!loadTableFile(manager, table)) return false;
     RecordHeader new_header;
     pager.tableMetadata[id] = new_header;
-    if!(requestRecordBankHeader(manager.files.at(id), globalRBHeader, pager.tableMetadata.at(id))) return false;
+    if(!requestRecordBankHeader(manager.files.at(id), globalRBHeader, pager.tableMetadata.at(id), id)) return false;
     return true;
 
 }
@@ -1617,8 +1627,16 @@ bool load_tree() {
 bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
     logger.transaction.start = true;
 
-    std::fstream LoggerFile("logger.bin", std::ios::binary | std::ios::in | std::ios::out);
-    std::fstream BeforeImageLogFile("beforeImage.bin", std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+    std::fstream LoggerFile(std::filesystem::path(BASE_DIRECTORY) / LOGGER_FILENAME, std::ios::binary | std::ios::in | std::ios::out);
+    if(!LoggerFile) {
+        LoggerFile.close();
+        LoggerFile.open(std::filesystem::path(BASE_DIRECTORY) / LOGGER_FILENAME, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+        if(!flush_logger_header(LoggerFile, globalLogHeader)) {
+            std::cerr << "Failed to create logger file\n";
+            return false;
+        }
+    }
+    std::fstream BeforeImageLogFile(std::filesystem::path(BASE_DIRECTORY) / BEFOREIMAGE_FILENAME, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
 
     if(!requestLoggerHeader(LoggerFile, globalLogHeader, logger.header)) {
         return false;
@@ -1690,7 +1708,9 @@ bool COMMIT(FileManager& manager, Logger& logger, Pager& pager) {
         count++;
         if(!page.dirty) continue;
         
-        if(!loadTableFile(manager, key.tableID)) {
+        std::filesystem::path filePath = std::filesystem::path(BASE_DIRECTORY);
+        filePath /= std::to_string(key.tableID);
+        if(!loadTableFile(manager, key.tableID, filePath)) {
             return false;
         }
         if(!flush_page(manager.files.at(key.tableID), page)) {
@@ -1700,7 +1720,7 @@ bool COMMIT(FileManager& manager, Logger& logger, Pager& pager) {
         mark_clean(page);
     }
 
-    for(auto& [id : file] : manager.files) {
+    for(auto& [id, file] : manager.files) {
         flush_metadata(file, pager.tableMetadata[id]);
     }
     EmptyLogger(logger);
@@ -1824,7 +1844,7 @@ bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
     return true;
 }
 
-bool INSERT(std::fstream& file, Pager& pager, Logger& logger, Row& row) {
+bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
  
     Page* page = requestPageWithSpace(file, logger, pager, tableID, row);
     if (!page) {
@@ -1855,29 +1875,20 @@ bool CREATE_INDEX() {
 
 }
 
+/*
 int testReco() {
-
-    /*
-    Row row;
-    row.add_entry(static_cast<DataType>(1), 5000);
-    row.add_entry(static_cast<DataType>(2), "femboy fridays with yohan the butcher");
-    row.add_entry(static_cast<DataType>(3), 12.4556);
-    */
 
     RecordHeader globalRBHeader{0x44415441, 5};
     LoggerHeader globalLogHeader{0x44518449, 4};
     BeforeImageHeader globalImageHeader{0x75314648, 1};
     globalLogHeader.LatestLSN = 7;
     globalRBHeader.TABLEID = 1;
-    /*
     std::fstream file2("logger.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
     if (!flush_logger_header(file2, globalLogHeader)) {
         std::cout << "Failed to flush loggers header at beggining of file\n";
         return 1;
     }
     file2.close();
-    */
-    /*
     std::fstream file1("data.bin", std::ios::binary | std::ios::out | std::ios::in | std::ios::trunc);
     if (!flush_metadata(file1, globalRBHeader)) {
         std::cout << "Failed to flush RB header at beggining of file\n";
@@ -1885,7 +1896,6 @@ int testReco() {
     }
  
     file1.close();
-    */
 
     if(!SYNC(globalLogHeader, globalImageHeader)) {
         std::cerr << "Failed to SYNC DB\n";
@@ -1984,6 +1994,7 @@ int testReco() {
     std::cout << "Compiles!\n";
     return 0;
 }
+*/
 //////////////////////////////////////
 /* TODO:
  * 1. Inegrate and TEST requestPageWithSpace() func into INSERT func
@@ -1991,6 +2002,7 @@ int testReco() {
  * 3. Make auto incriment on insertions for cols with Primary Key
  * 4. Make SURE that if the row has a Primary Key that UPDATE will not auto incriment when inserting
  */
+/*
 int main() {
 
     RecordHeader globalRBHeader{0x44415441, 5};
@@ -2137,3 +2149,4 @@ int main() {
 
     std::cout << "Compiles!\n";
 }
+*/

@@ -85,12 +85,12 @@ clean: CMakeFiles/database.dir/clean
 CMakeFiles/database.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/lazy/GitHub/DataBase_PT/build/CMakeFiles --progress-num=1,2,3,4 "Built target database"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/lazy/GitHub/DataBase_PT/build/CMakeFiles --progress-num=1,2,3,4,5 "Built target database"
 .PHONY : CMakeFiles/database.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/database.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/lazy/GitHub/DataBase_PT/build/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/lazy/GitHub/DataBase_PT/build/CMakeFiles 5
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/database.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/lazy/GitHub/DataBase_PT/build/CMakeFiles 0
 .PHONY : CMakeFiles/database.dir/rule
@@ -102,7 +102,7 @@ database: CMakeFiles/database.dir/rule
 # codegen rule for target.
 CMakeFiles/database.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/lazy/GitHub/DataBase_PT/build/CMakeFiles --progress-num=1,2,3,4 "Finished codegen for target database"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/lazy/GitHub/DataBase_PT/build/CMakeFiles --progress-num=1,2,3,4,5 "Finished codegen for target database"
 .PHONY : CMakeFiles/database.dir/codegen
 
 # clean rule for target.
