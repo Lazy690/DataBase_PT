@@ -1,4 +1,5 @@
 #include <string>
+#include <optional>
 #include <vector>
 #include <cstddef> 
 #include <unordered_map>
@@ -21,6 +22,7 @@ struct TB_Header {
     uint32_t VERSION;
     uint32_t ID = 0;
     uint32_t NUM_COLUMNS = 0;
+    int32_t LatestAutoIncriment = 0;
 };
 
 struct RecordHeader {
@@ -33,9 +35,14 @@ struct RecordHeader {
 
 struct Table {
     using column_index = uint32_t;
+    using column_name  = std::string;
     TB_Header header;
     std::string name;
+
+
+    std::unordered_map<column_name, column_index> id_lookup;
     std::unordered_map<column_index, Column> schema;
+    std::optional<uint32_t> autoIncrimentedColumnIDptr;
     fs::path path;
 };
 

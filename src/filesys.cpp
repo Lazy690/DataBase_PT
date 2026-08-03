@@ -294,12 +294,16 @@ bool load_table_data(std::fstream& file, Table& table, TB_Header globalHeader, u
     table.name = table_name;
     index += (sizeof(name_len) + name_len);
     
-    for(int i = 0; i < table.header.NUM_COLUMNS; i++){
+    for(uint32_t i = 0; i < table.header.NUM_COLUMNS; i++){
         Column column;
         if(!load_column(file, column, index)) {
             return false;
         }
         table.schema[i] = column;
+        table.id_lookup[column.name] = i;
+        if(column.constraints.auto_incriment) {
+            table.autoIncrimentedColumnIDptr = i;
+        }
     }
     return true;
 }
@@ -609,8 +613,12 @@ bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string
     uint32_t columnCount = 0;
 
     for (const auto& column : columns) {
-        table.schema[columnCount] = column;
+        table.schema[columnCount]    = column;
+        table.id_lookup[column.name] = columnCount;
         columnCount++;
+        if(column.constraints.auto_incriment) {
+            table.autoIncrimentedColumnIDptr = columnCount;
+        }
     }
 
     table.header.NUM_COLUMNS = columnCount;

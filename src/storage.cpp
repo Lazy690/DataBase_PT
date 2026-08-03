@@ -1379,11 +1379,6 @@ struct QueryParams {
     
 };
 
-struct ScanResult {
-    size_t pageId = 0;
-    size_t offset = 0;
-    Row row;
-};
 
 bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
 
@@ -1511,6 +1506,27 @@ ScanTable(uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, c
 
 }
 
+bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value) {
+
+    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) {
+        return true;
+    } 
+    for (uint32_t id = 0; id < pager.tableMetadata[tableID].PAGECOUNT; id++) {
+        
+        Page* page = requestPage(file, pager, {tableID, id});
+
+        std::vector<ScanResult> result;       
+        if(!ScanPage(result, *page, column_index, Conditional::EQUAL, value)) {
+            std::cerr << "Failed to scan table\n";
+            return false;
+        }
+        if(result.size() > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 //===================================
 // Index Section
 //===================================
@@ -1523,23 +1539,30 @@ Node CreateNode(PageKey id, Entry entry, uint32_t offset) {
 }
 
 std::vector<char> serializeNode(Node& node) {
+    std::vector<char> v;
+    return v;
 
 }
 std::vector<char> serializeBranch(Branch& branch) {
-
+    std::vector<char> v;
+    return v;
+  
 }
 
 std::optional<Node>
 deserializeNode(std::span<const char> nodeBytes) {
+    return std::nullopt;
 
 }
 
 std::optional<Node>
 deserializeBranch(std::span<const char> branchBytes) {
+    return std::nullopt;
 
 }
 
 bool InsertIntoTree(Tree& tree, Node& node) {
+    return true;
 
 }
 
@@ -1578,46 +1601,57 @@ bool IndexTable(Tree& tree, Pager& pager, uint32_t tableID, uint32_t column_inde
             }
         }
     }
+    return true;
 }
 
 bool flsuh_branch_header() {
+    return true;
 
 }
 
 bool load_branch_header() {
+    return true;
 
 }
 
 bool flush_branch() {
 
+    return true;
 }
 
 bool load_branch() {
 
+    return true;
 } 
 
 bool flush_tree_header() {
 
+    return true;
 }
 
 bool load_tree_header() {
 
+    return true;
 }
 
 bool validate_tree_header () {
 
+    return true;
 }
 
 bool requestTreeHeader() {
 
+    return true;
 }
 
 bool flush_tree() {
 
+    return true;
 }
 
 bool load_tree() {
 
+    return true;
 }
 
 //===================================
@@ -1724,7 +1758,7 @@ bool COMMIT(FileManager& manager, Logger& logger, Pager& pager) {
         flush_metadata(file, pager.tableMetadata[id]);
     }
     EmptyLogger(logger);
-    std::filesystem::remove_all(std::filesystem::path("beforeImage.bin"));
+    std::filesystem::remove_all(std::filesystem::path("../beforeImage.bin"));
     return true;
 }
  
@@ -1872,6 +1906,7 @@ bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, 
 }
 
 bool CREATE_INDEX() {
+    return true;
 
 }
 

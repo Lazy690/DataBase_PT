@@ -199,7 +199,19 @@ struct FileManager {
     std::unordered_map<tableID, std::fstream> files;
 };
 
+void printRow(Row& row);
+
 bool loadTableFile(FileManager& manager, const Table& table);
+bool loadTableMetadata(FileManager& manager, Pager& pager, RecordHeader& globalRBHeader, const Table& table);
+
+
+struct ScanResult {
+    size_t pageId = 0;
+    size_t offset = 0;
+    Row row;
+};
+bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value);
+
 bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader);
 bool COMMIT(FileManager& manager, Logger& logger, Pager& pager);
 

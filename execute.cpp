@@ -7,7 +7,7 @@
 #include "src/storage.hpp"
 
 DB_Header globalDBHEADER{0x44415641, 3};
-TB_Header globalTBHEADER{0x44415441, 4};
+TB_Header globalTBHEADER{0x44415441, 5};
 RecordHeader globalRBHEADER{0x44415441, 5};
 LoggerHeader globalLogHeader{0x44518449, 4};
 BeforeImageHeader globalImageHeader{0x75314648, 1};
@@ -32,22 +32,22 @@ std::vector<Column> ConvertToColumns(const std::vector<Column_AST>& col_asts) {
     }
     return results;
 }
-Row ConvertToRow(const std::vector<Token>& tokens, const std::vector<DataType> types) {
-    assert(tokens.size() == types.size());
+Row ConvertToRow(const std::vector<Token>& tokens) {
+    //assumes its sorted
     Row row;
 
-    for (size_t i = 0; i < types.size(); i++) {
+    for (size_t i = 0; i < tokens.size(); i++) {
         Entry entry;
-        switch(types[i]) {
-            case DataType::INTEIRO:
+        switch(tokens[i].type) {
+            case TokenType::INT:
                 entry.type  = DataType::INTEIRO;
                 entry.value = static_cast<int32_t>(std::stoi(tokens[i].value));
                 break;
-            case DataType::TEXTO:
+            case TokenType::STRING:
                 entry.type  = DataType::TEXTO;
                 entry.value = tokens[i].value;
                 break;
-            case DataType::REAL:
+            case TokenType::DOUBLE:
                 entry.type  = DataType::REAL;
                 entry.value = std::stod(tokens[i].value);
                 break;
@@ -58,12 +58,137 @@ Row ConvertToRow(const std::vector<Token>& tokens, const std::vector<DataType> t
     return row;
 }
 
-bool VerifyColumnName(const Row& row, const Constraints_list list) {
+void sortRowTokens(std::vector<Token>& entries, std::vector<Token>& attributes, const Table& table) {
+    assert(entries.size()==attributes.size());
+    std::vector<Token> sortedEntries;
+    std::vector<Token> sortedAttributes;
 
+    for (uint32_t i = 0; i < table.schema.size(); i++) {
+        std::cout << "Iteration: " << i << "\n";
+        uint32_t index = 0;
+        for(auto& attribute : attributes) {
+            std::cout << "Index: " << index << "\n";
+            if(attribute.value == table.schema.at(i).name) {
+                std::cout << "Found: " << attribute.value << "/" << table.schema.at(i).name << "\n";
+                sortedAttributes.push_back(attribute);
+                sortedEntries.push_back(entries[index]);
+                break;
+            }
+            ++index;
+        }
+    }
+    attributes = sortedAttributes;
+    entries = sortedEntries;
+}
+
+bool VerifyColumnName(const Token& attribute, const Table& table) {
+    auto it = table.id_lookup.find(attribute.value);
+    if(it == table.id_lookup.end()) {
+        std::cerr << "attribute: " << attribute.value << " Does not Exist\n";
+        return false;
+    }
     return true;
 }
-bool VerifyTypeIntegrety(const Row& row, const Constraints_list list) {
+bool VerifyTypeIntegrety(const Token& attribute, const Token& value, const Table& table) {
+    //assumes attribute names where Verified
+    uint32_t ColumnID = table.id_lookup.at(attribute.value);
+    Column column = table.schema.at(ColumnID);
 
+    if(column.type == DataType::INTEIRO) {
+        if(value.type != TokenType::INT) {
+            throw std::runtime_error("Entry is not an INT\n");
+            return false;
+        }
+    }
+    else if(column.type == DataType::REAL) {
+        if(value.type != TokenType::DOUBLE) {
+            throw std::runtime_error("Entry is not a DOUBLE\n");
+            return false;
+        }
+    }
+    else if(column.type == DataType::TEXTO) {
+        if(value.type != TokenType::STRING) {
+            throw std::runtime_error("Entry is not of DataType TEXT\n");
+            return false;
+        }
+    }
+ 
+    return true;
+}
+bool VerifyUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value) {
+    if (!ScanUniqueness(file, tableID, pager, column_index, value)) {
+        throw std::runtime_error("Value is not UNIQUE");
+    }
+    return true;
+}
+bool EnforceColumnIntegrety(const std::vector<Token>& attributes, const std::vector<Token> values, const Table& table) {
+    try {
+        for(size_t i = 0; i < attributes.size(); i++) {
+            if(!VerifyColumnName(attributes[i], table)) return false;
+            if(!VerifyTypeIntegrety(attributes[i], values[i], table)) return false;
+        }
+    } catch(const std::runtime_error& e) {
+        std::cerr << "Integrety Error: " << e.what() << "\n";
+        return false;
+    }
+    return true;
+}
+bool EnforceIntegretyList(std::fstream& file, Pager& pager, const Table& table, 
+                          std::vector<Token> attributes, std::vector<Token>& values) {
+    try {
+        for(uint32_t i = 0; i < attributes.size(); i++) {
+
+            uint32_t column_index = table.id_lookup.at(attributes[i].value);
+            Column column = table.schema.at(column_index);
+
+            if(column.constraints.unique) {
+                switch(values[i].type) {
+                    case::TokenType::INT:
+                        {
+                            int val = std::stoi(values[i].value);
+                            if(!VerifyUniqueness(file, table.header.ID, pager, column_index, static_cast<int32_t>(val))) return false;
+                        }
+                        break;
+                    case::TokenType::STRING:
+                        if(!VerifyUniqueness(file, table.header.ID, pager, column_index, values[i].value)) return false;
+                        break;
+                    case::TokenType::DOUBLE:
+                        if(!VerifyUniqueness(file, table.header.ID, pager, column_index, std::stod(values[i].value))) return false;
+                        break;
+                }
+            }
+        }
+    } catch(const std::runtime_error& e) {
+        std::cerr << "Integrety Error: " << e.what() << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool handleAutoInciment(Table& table, std::vector<Token>& attributes, std::vector<Token>& values) {
+    //assumes rows entries are sorted
+    if(!table.autoIncrimentedColumnIDptr) {
+        std::cout << "No autoIncrimentedColumn\n";
+        return true;
+
+    }
+    std::string autoIncrimented_name = table.schema.at(*table.autoIncrimentedColumnIDptr).name;
+
+    for (size_t i = 0; i < attributes.size(); i++) {
+        if (attributes[i].value == autoIncrimented_name) {
+            if(std::stoi(values[i].value) > table.header.LatestAutoIncriment) {
+                table.header.LatestAutoIncriment = std::stoi(values[i].value);
+            }
+            return true;
+        }
+    }
+
+    int32_t incriment = ++table.header.LatestAutoIncriment;
+    uint32_t column_index = *table.autoIncrimentedColumnIDptr;
+
+    Token token{TokenType::INT, std::to_string(incriment)};
+    values.insert(values.begin() + column_index, token);
+    assert(values.size() != (values.size() - 1) );
     return true;
 }
 
@@ -160,9 +285,26 @@ bool EXECUTE(CacheManagement& cache, std::string sql) {
             if(!loadTableFile(manager, database.tables.at(tableID))) {
                 return false;
             }
+            if(!EnforceColumnIntegrety(tree.attributes, tree.values, database.tables.at(tableID))) {
+                return false;
+            }
 
-            //temporary
-            Row row = ConvertToRow(tree.values, {DataType::INTEIRO, DataType::TEXTO, DataType::REAL});
+            if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
+                return false;
+            }
+            sortRowTokens(tree.values, tree.attributes, database.tables.at(tableID));
+
+            if(!EnforceIntegretyList(manager.files.at(tableID), pager, database.tables.at(tableID), tree.attributes, tree.values)) {
+                return false;
+            }
+            if(!handleAutoInciment(database.tables.at(tableID), tree.attributes, tree.values)) {
+                return false;
+            }
+
+            Row row = ConvertToRow(tree.values);
+            
+            //Temporary
+            printRow(row);
 
             if(!INSERT(manager.files.at(tableID), tableID, pager, logger, row)) {
                 return false;
@@ -198,20 +340,37 @@ int main() {
     
     CacheManagement cache;
 
+    /*
+    if(!EXECUTE(cache, "DROP DATABASE Dudes")) {
+        return 1;
+    }
+    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
+    */
+
+    if(!EXECUTE(cache, "CREATE DATABASE Dudes")) {
+        return 1;
+    }
+    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
+
     CONNECTION_STATUS status = CONNECT("Dudes", cache.database, globalDBHEADER, globalTBHEADER);
     if(status == CONNECTION_STATUS::FAILED) {
         std::cout << "Connection failed\n";
         return 1;
     }
+    printDataBase(cache.database);
     if(status == CONNECTION_STATUS::NOT_EXISTS) {
-        std::cout << "Connection failed\n";
+        std::cout << "Database does not Exist\n";
         return 1;
     }
+    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED, grade DOUBLE)")) {
+        return 1;
+    }
+    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
 
     if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    if(!EXECUTE(cache, "INSERT (id, name, grade) INTO cool_dudes VALUES (1, 'Kirsche', 18.5)")) {
+    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (10.3, 'johana')")) {
         return 1;
     }
     COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);

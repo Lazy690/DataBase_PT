@@ -7,12 +7,12 @@
 
 enum class TokenType {
     IDENTIFIER,
-    NUMBER,
+    INT,
+    DOUBLE,
     STRING,
     OPERATOR,
     END
 };
-
 enum class Action {
     
     CREATE,

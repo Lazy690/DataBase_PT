@@ -16,7 +16,8 @@
 
 enum class TokenType {
     IDENTIFIER,
-    NUMBER,
+    INT,
+    DOUBLE,
     STRING,
     OPERATOR,
     END
@@ -383,14 +384,24 @@ std::vector<Token> TOKENIZE(const std::string& input) {
 
         // 5 Number
         if (isdigit(c)) {
+            bool is_double = false;
             current = "";
 
             while (i < input.size() && (isdigit(input[i]) || input[i] == '.')) {
                 current += input[i];
+                if(input[i] == '.') is_double = true;
                 i++;
             }
 
-            tokens.push_back({TokenType::NUMBER, current});
+            TokenType type;
+            if(is_double){
+                type = TokenType::DOUBLE;
+            }
+            else {
+                type = TokenType::INT;
+            }
+
+            tokens.push_back({type, current});
             i--; // adjust because loop increments
             continue;
         }
@@ -554,6 +565,7 @@ std::vector<Column_AST> handle_column_ast(Cursor& cursor) {
     int endof_parenthesis = cursor.getEndOfParenthesis();
     if(endof_parenthesis == 0) throw std::runtime_error("Token '(' was not closed.");
     bool expect_value = true;
+    bool has_autoIncriment = false;
 
     while(cursor.index != endof_parenthesis) {
         
@@ -601,11 +613,13 @@ std::vector<Column_AST> handle_column_ast(Cursor& cursor) {
                 }
 
                 else if(cursor.peek() == "AUTO_INCRIMENT") {
+                    if(has_autoIncriment) throw ("Only one column may be auto incremented");
                     if(col.type != DataType::INTEIRO) throw ("Non INT types cannot be assigned 'AUTO_INCIMENT' token.");
 
                     list.auto_incriment = true;
                     track_constraints.insert(cursor.peek());
                     cursor.skip();
+                    has_autoIncriment = true;
                     continue;
                 }
                 else if(cursor.peek() == "PRIMARY_KEY") {
