@@ -136,6 +136,20 @@ bool EnforceColumnIntegrety(const std::vector<Token>& attributes, const std::vec
 bool EnforceIntegretyList(std::fstream& file, Pager& pager, const Table& table, 
                           std::vector<Token> attributes, std::vector<Token>& values) {
     try {
+        
+        for (uint32_t column_index : table.NotNullColumns) {
+            Column column = table.schema.at(column_index);
+            bool found = false;
+            for (auto& attribute : attributes) {
+                if (column.name == attribute.value) {
+                    found = true;
+                    break;
+                }
+            }
+            if(!found) {
+                throw std::runtime_error("Entry must not be Null");
+            }
+        }
         for(uint32_t i = 0; i < attributes.size(); i++) {
 
             uint32_t column_index = table.id_lookup.at(attributes[i].value);
@@ -157,6 +171,7 @@ bool EnforceIntegretyList(std::fstream& file, Pager& pager, const Table& table,
                         break;
                 }
             }
+
         }
     } catch(const std::runtime_error& e) {
         std::cerr << "Integrety Error: " << e.what() << "\n";
@@ -274,6 +289,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql) {
                 return false;
             }
             
+            printDataBase(database);
             //Temporary: make this into a function
             auto it = database.id_lookup.find(tree.table.value);
             if(it == database.id_lookup.end()) {
@@ -292,11 +308,14 @@ bool EXECUTE(CacheManagement& cache, std::string sql) {
             if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
                 return false;
             }
+
             sortRowTokens(tree.values, tree.attributes, database.tables.at(tableID));
 
+            std::cout << "its this:\n";
             if(!EnforceIntegretyList(manager.files.at(tableID), pager, database.tables.at(tableID), tree.attributes, tree.values)) {
                 return false;
             }
+            std::cout << "never mind\n";
             if(!handleAutoInciment(database.tables.at(tableID), tree.attributes, tree.values)) {
                 return false;
             }
@@ -357,12 +376,11 @@ int main() {
         std::cout << "Connection failed\n";
         return 1;
     }
-    printDataBase(cache.database);
     if(status == CONNECTION_STATUS::NOT_EXISTS) {
         std::cout << "Database does not Exist\n";
         return 1;
     }
-    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED, grade DOUBLE)")) {
+    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED NOT_NULL, grade DOUBLE)")) {
         return 1;
     }
     COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
@@ -370,7 +388,7 @@ int main() {
     if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (10.3, 'johana')")) {
+    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (10.3, 'alleb')")) {
         return 1;
     }
     COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);

@@ -304,6 +304,9 @@ bool load_table_data(std::fstream& file, Table& table, TB_Header globalHeader, u
         if(column.constraints.auto_incriment) {
             table.autoIncrimentedColumnIDptr = i;
         }
+        if(column.constraints.not_null) {
+            table.NotNullColumns.insert(i);
+        }
     }
     return true;
 }
@@ -615,10 +618,13 @@ bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string
     for (const auto& column : columns) {
         table.schema[columnCount]    = column;
         table.id_lookup[column.name] = columnCount;
-        columnCount++;
         if(column.constraints.auto_incriment) {
             table.autoIncrimentedColumnIDptr = columnCount;
         }
+        if(column.constraints.not_null) {
+            table.NotNullColumns.insert(columnCount);
+        }
+        columnCount++;
     }
 
     table.header.NUM_COLUMNS = columnCount;

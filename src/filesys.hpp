@@ -42,7 +42,9 @@ struct Table {
 
     std::unordered_map<column_name, column_index> id_lookup;
     std::unordered_map<column_index, Column> schema;
+
     std::optional<uint32_t> autoIncrimentedColumnIDptr;
+    std::unordered_set<column_index> NotNullColumns;
     fs::path path;
 };
 
