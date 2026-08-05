@@ -199,6 +199,14 @@ struct FileManager {
     std::unordered_map<tableID, std::fstream> files;
 };
 
+//Queries
+
+struct QueryParams {
+    size_t column_index; 
+    const Conditional conditional; 
+    const std::variant<int32_t, std::string, double> value;
+};
+
 void printRow(Row& row);
 
 bool loadTableFile(FileManager& manager, const Table& table);
@@ -216,3 +224,4 @@ bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& glo
 bool COMMIT(FileManager& manager, Logger& logger, Pager& pager);
 
 bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, Row& row);
+bool SELECT(std::fstream& file, std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager& pager, QueryParams* params = nullptr);

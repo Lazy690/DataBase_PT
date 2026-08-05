@@ -401,7 +401,6 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             sortAttributeTokens(tree.attributes, database.tables.at(tableID));
 
             std::vector<Row> queryResult;
-            std::cout << "Loaded metadata pagecount: " << pager.tableMetadata[tableID].PAGECOUNT << "\n";
             if(!SELECT(manager.files.at(tableID), queryResult, tableID, logger, pager)) {
                 return false;
             }
@@ -458,7 +457,7 @@ int main() {
     if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (6.7, 'Cocoloco')", result)) {
+    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (10.3, 'kirche')", result)) {
         return 1;
     }
     if(!EXECUTE(cache, "SELECT (id, name, grade) FROM cool_dudes", result)) {
@@ -471,7 +470,7 @@ int main() {
         std::string name = result.get<std::string>(1);
         double grade = result.get<double>(2);
         std::cout << "------------------\n";
-        std::cout << " id: " << id << "\n name: " << name << "\n grade: " << grade << "\n";
+        std::cout << "id: " << id << "\n name: " << name << "\n grade: " << grade << "\n";
     }
     std::cout << "------------------\n";
     COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);

@@ -230,6 +230,11 @@ bool requestRecordBankHeader(std::fstream& file, RecordHeader& globalHeader, Rec
 bool loadTableMetadata(FileManager& manager, Pager& pager, RecordHeader& globalRBHeader, const Table& table) {
 
     uint32_t id = table.header.ID;
+    auto it = pager.tableMetadata.find(id);
+    if(it != pager.tableMetadata.end()) {
+        return true;
+    }
+
     if(!loadTableFile(manager, table)) return false;
     RecordHeader new_header;
     pager.tableMetadata[id] = new_header;
@@ -649,13 +654,13 @@ Page* requestPageWithSpace(std::fstream& file, Logger& logger, Pager& pager, con
 
     uint32_t latestID = pager.tableMetadata[tableID].PAGECOUNT;
     if (latestID == 0) {
-       pager.tableMetadata[tableID].PAGECOUNT++;
-       if(pager.pages.size() == MAXPAGES) {
-          evictPage(file, pager, &logger);
-       }
-       Page newPage = create_page(latestID);
-       pager.pages.insert({{tableID, latestID}, newPage});
-       page = &pager.pages.at({tableID, latestID});
+        pager.tableMetadata[tableID].PAGECOUNT++;
+        if(pager.pages.size() == MAXPAGES) {
+            evictPage(file, pager, &logger);
+        }
+        Page newPage = create_page(latestID);
+        pager.pages.insert({{tableID, latestID}, newPage});
+        page = &pager.pages.at({tableID, latestID});
     }
     else {
         latestID--;
@@ -665,13 +670,13 @@ Page* requestPageWithSpace(std::fstream& file, Logger& logger, Pager& pager, con
         }
 
         if (!will_fit(*page, row.size())) {
-          pager.tableMetadata[tableID].PAGECOUNT++;
-          latestID++;
-          if(pager.pages.size() == MAXPAGES) {
-              evictPage(file, pager, &logger);
-          }
-          pager.pages.insert({{tableID, latestID}, create_page(latestID)});
-          page = &pager.pages.at({tableID, latestID});
+            pager.tableMetadata[tableID].PAGECOUNT++;
+            latestID++;
+            if(pager.pages.size() == MAXPAGES) {
+                evictPage(file, pager, &logger);
+            }
+            pager.pages.insert({{tableID, latestID}, create_page(latestID)});
+            page = &pager.pages.at({tableID, latestID});
         }
 
     }
@@ -1375,11 +1380,6 @@ struct Set {
     std::variant<int32_t, std::string, double> value;
 };
 
-struct QueryParams {
-    
-};
-
-
 bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
 
     auto cursor = page.buffer.begin();
@@ -1420,7 +1420,7 @@ bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
     return true;
 }
 
-bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+bool ScanPage(std::vector<ScanResult>& results, const Page& page, QueryParams params) {
  
     auto cursor = page.buffer.begin();
 
@@ -1450,25 +1450,25 @@ bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_
         size_t rowOffset  = std::distance(page.buffer.begin(), cursor);
         size_t ID         = page.header.id;
 
-        std::visit([&value, conditional, &results, &row, rowOffset, ID](const auto& x) {
+        std::visit([&params, &results, &row, rowOffset, ID](const auto& x) {
             using T = std::decay_t<decltype(x)>;
               
             if constexpr (std::is_same_v<T, int32_t>) {
-                if(compare(x, conditional, std::get<int32_t>(value))) {
+                if(compare(x, params.conditional, std::get<int32_t>(params.value))) {
                     results.push_back({ID, rowOffset, row});
                 }
             }
             else if constexpr (std::is_same_v<T, std::string>) {
-                if(compare(x, conditional, std::get<std::string>(value))) {
+                if(compare(x, params.conditional, std::get<std::string>(params.value))) {
                     results.push_back({ID, rowOffset, row});
                 }
             }
             else if constexpr (std::is_same_v<T, double>) {
-                if(compare(x, conditional, std::get<double>(value))) {
+                if(compare(x, params.conditional, std::get<double>(params.value))) {
                     results.push_back({ID, rowOffset, row});
                 }
             }
-        }, row.values[column_index].value);
+        }, row.values[params.column_index].value);
 
         int tumpstoneByteSize = sizeof(row.tumpstoned);
         int sizeOfRowByteSize = sizeof(row.sizeOfRow);
@@ -1478,7 +1478,7 @@ bool ScanPage(std::vector<ScanResult>& results, const Page& page, size_t column_
     return true;
 }
 std::optional<std::vector<ScanResult>>
-ScanTable(uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+ScanTable(std::fstream& file, uint32_t tableID, Logger& logger, Pager& pager, QueryParams* params = nullptr) {
     
     std::vector<ScanResult> results;
 
@@ -1486,18 +1486,23 @@ ScanTable(uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, c
         std::cout << "Table has no pages\n";
         return results;
     } 
-    //!!!!!!Temporary!!!!!!
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    ///////////////////////
 
     for (uint32_t id = 0; id < pager.tableMetadata[tableID].PAGECOUNT; id++) {
         
         Page* page = requestPage(file, pager, {tableID, id}, &logger);
 
         std::vector<ScanResult> result;       
-        if(!ScanPage(result, *page, column_index, conditional, value)) {
-            std::cerr << "Failed to scan table\n";
-            return std::nullopt;
+        if(!params) {
+            if(!ScanAllRows(result, *page)) {
+                std::cerr << "Failed to scan table\n";
+                return std::nullopt;
+            }
+        }
+        else {
+            if(!ScanPage(result, *page, *params)) {
+                std::cerr << "Failed to scan table\n";
+                return std::nullopt;
+            }
         }
         results.insert(results.end(), result.begin(), result.end());
     }
@@ -1516,7 +1521,8 @@ bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t c
         Page* page = requestPage(file, pager, {tableID, id});
 
         std::vector<ScanResult> result;       
-        if(!ScanPage(result, *page, column_index, Conditional::EQUAL, value)) {
+        QueryParams params = {column_index, Conditional::EQUAL, value};
+        if(!ScanPage(result, *page, params)) {
             std::cerr << "Failed to scan table\n";
             return false;
         }
@@ -1762,8 +1768,9 @@ bool COMMIT(FileManager& manager, Logger& logger, Pager& pager) {
     return true;
 }
  
-bool SELECT(std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager& pager, size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
-    auto resultsPtr = ScanTable(tableID, logger, pager, column_index, conditional, value);
+bool SELECT(std::fstream& file, std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager& pager, QueryParams* params) {
+    
+    auto resultsPtr = ScanTable(file, tableID, logger, pager, params);
     if (!resultsPtr) {
         return false;
     }
@@ -1776,18 +1783,14 @@ bool SELECT(std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager
     return true;
 }
 
-bool DELETE(uint32_t tableID, Pager& pager, Logger& logger, 
-            size_t column_index, const Conditional conditional, const std::variant<int32_t, std::string, double> value) {
+bool DELETE(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, QueryParams* params) {
 
-    auto resultsPtr = ScanTable(tableID, logger, pager, column_index, conditional, value);
+    auto resultsPtr = ScanTable(file, tableID, logger, pager, params);
     if(!resultsPtr) {
         return false;
     }
 
     std::vector<ScanResult> results = *resultsPtr;
-    //!!!!!!Temporary!!!!!!
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    ///////////////////////
     for (auto& result : results) {
         uint32_t ID = result.pageId;
         Page* page = requestPage(file, pager, {tableID, ID}, &logger);
@@ -1812,20 +1815,15 @@ bool DELETE(uint32_t tableID, Pager& pager, Logger& logger,
     return true;
 }
 
-bool UPDATE(uint32_t tableID, Pager& pager, Logger& logger,
-            std::vector<Set> sets,
-            size_t column_index, const Conditional conditional, 
-            const std::variant<int32_t, std::string, double> value) {
+bool UPDATE(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, std::vector<Set> sets, QueryParams* params) {
 
-    auto resultsPtr = ScanTable(tableID, logger, pager, column_index, conditional, value);
+  
+    auto resultsPtr = ScanTable(file, tableID, logger, pager, params);
     if(!resultsPtr) {
         return false;
     }
     std::vector<ScanResult> results = *resultsPtr;
 
-    //!!!!!!Temporary!!!!!!
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    ///////////////////////
     for (auto& result : results) {
         uint32_t ID = result.pageId;
         Page* page = requestPage(file, pager, {tableID, ID}, &logger);
