@@ -15,6 +15,8 @@ enum class TokenType {
 };
 enum class Action {
     
+    CONNECT,
+    DISCONNECT,
     CREATE,
     DROP,
     INSERT,
@@ -173,13 +175,20 @@ class Where_clause {
 
 };
 
-
 struct Column_AST {
 
     Token name;
     DataType type;
     Constraints_list constraints;
 
+};
+
+struct CONNECT_AST {
+    Token database;
+};
+
+struct DISCONNECT_AST {
+    Token database;
 };
 
 struct CREATE_AST {
@@ -231,7 +240,9 @@ struct UPDATE_AST {
 
 struct AbstractSyntaxTree {
     Action action;
-    std::variant<CREATE_AST, 
+    std::variant<CONNECT_AST,
+                 DISCONNECT_AST,
+                 CREATE_AST, 
                  DROP_AST, 
                  INSERT_AST, 
                  SELECT_AST, 

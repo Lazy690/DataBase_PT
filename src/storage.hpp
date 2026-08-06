@@ -207,6 +207,60 @@ struct QueryParams {
     const std::variant<int32_t, std::string, double> value;
 };
 
+//Compare Functions
+template<typename T>
+bool compare(T RowValue, Conditional conditional, T value, bool negated = false) {
+    bool result;
+
+    switch(conditional) {
+        case Conditional::EQUAL:
+            if(RowValue == value){
+                result = true;
+            }
+            else {
+                result = false;
+            } 
+            break;
+        case Conditional::GREATER:
+            if(RowValue > value){
+                result = true;
+            }
+            else {
+                result = false;
+            } 
+            break;
+        case Conditional::LESSER:
+            if(RowValue < value){
+                result = true;
+            }
+            else {
+                result = false;
+            } 
+            break;
+        case Conditional::GREATERorEQUAL:
+            if(RowValue >= value){
+                result = true;
+            }
+            else {
+                result = false;
+            } 
+            break;
+        case Conditional::LESSERorEQUAL:
+            if(RowValue <= value){
+                result = true;
+            }
+            else {
+                result = false;
+            } 
+            break;
+    }
+    if(negated) {
+        if (result) result = false;
+        else result = true;
+    }
+    return result;
+};
+
 void printRow(Row& row);
 
 bool loadTableFile(FileManager& manager, const Table& table);

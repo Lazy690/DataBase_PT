@@ -21,6 +21,20 @@ struct CacheManagement {
 
 };
 
+bool (*IntComparison)(int32_t, Conditional, int32_t, bool) = compare;
+bool (*StrComparison)(std::string, Conditional, std::string, bool) = compare;
+bool (*DubComparison)(double, Conditional, double, bool)  = compare;
+
+template<typename T>
+struct QueryFilter {
+
+    T ValueFromQuery;
+    Comparison comparison;
+    T ValueFromRow;
+    bool is_negated = false;
+
+};
+
 std::vector<Column> ConvertToColumns(const std::vector<Column_AST>& col_asts) {
     std::vector<Column> results;
     for(auto& col_ast : col_asts) {
@@ -240,15 +254,27 @@ struct ResultSet {
 ResultSet ReturnResultSet(const std::vector<Row>& rows, const std::vector<Token>& attributes, const Table& table) {
     //Assumes columns are sorted and verified
     ResultSet set;
-    for (auto& row : rows) {
-        Result result;
-        for (auto& attribute : attributes) {
-            uint32_t column_index = table.id_lookup.at(attribute.value);
-            result.values.push_back(row.values[column_index].value);
+    if(attributes[0].value == "*") {
+        for(auto& row : rows) {
+            Result result;
+            for(auto& entry : row.values) {
+                result.values.push_back(entry.value);
+            }
+            set.values.push_back(result);
         }
-        set.values.push_back(result);
+        return set;
     }
-    return set;
+    else {
+        for (auto& row : rows) {
+            Result result;
+            for (auto& attribute : attributes) {
+                uint32_t column_index = table.id_lookup.at(attribute.value);
+                result.values.push_back(row.values[column_index].value);
+            }
+            set.values.push_back(result);
+        }
+        return set;
+    }
 }
 
 
@@ -263,6 +289,46 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
     if(!GENERATE_AST(AST, sql)) return false;
 
     switch (AST.action) {
+        case Action::CONNECT:
+        {
+            CONNECT_AST tree = std::get<CONNECT_AST>(AST.tree);
+            if(database.connected) {
+                std::cerr << "cannot connect to database while already connected to one.\n";
+                return false;
+            }
+            database = {};
+            
+            CONNECTION_STATUS status = CONNECT(tree.database.value, cache.database, globalDBHEADER, globalTBHEADER);
+            if(status == CONNECTION_STATUS::FAILED) {
+                std::cerr << "Connection failed\n";
+                return false;
+            }
+            if(status == CONNECTION_STATUS::NOT_EXISTS) {
+                std::cerr << "Database does not Exist\n";
+                return false;
+            }
+            else if(status == CONNECTION_STATUS::CONNECTED) {
+                std::cout << "CONNECT DATABASE.\n";
+                return true;
+            }
+        }
+        case Action::DISCONNECT:
+        {
+            DISCONNECT_AST tree = std::get<DISCONNECT_AST>(AST.tree);
+            if(!database.connected) {
+                std::cerr << "cannot disconnect from database when not connected to any.\n";
+                return false;
+            }
+            if(database.name != tree.database.value) {
+                std::cerr << "Not connected to this database\n";
+                return false;
+            }
+            else {
+                database = {};
+                std::cout << "DISCONNECT DATABASE\n";
+                return true;
+            }
+        }
         case Action::CREATE: 
         {
             CREATE_AST tree = std::get<CREATE_AST>(AST.tree);
@@ -391,14 +457,17 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
                 return false;
             }
-            for (auto& attribute : tree.attributes) {
-                if(!VerifyColumnName(attribute, database.tables.at(tableID))) {
-                    std::cerr << "Column does not Exist\n";
-                    return false;
+            
+            if(tree.attributes[0].value != "*") {
+                for (auto& attribute : tree.attributes) {
+                    if(!VerifyColumnName(attribute, database.tables.at(tableID))) {
+                        std::cerr << "Column does not Exist\n";
+                        return false;
+                    }
                 }
+                sortAttributeTokens(tree.attributes, database.tables.at(tableID));
             }
-
-            sortAttributeTokens(tree.attributes, database.tables.at(tableID));
+            else assert(tree.attributes.size() == 1);
 
             std::vector<Row> queryResult;
             std::cout << "Loaded metadata pagecount: " << pager.tableMetadata[tableID].PAGECOUNT << "\n";
@@ -406,9 +475,6 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                 return false;
             }
             else {
-                for (auto& qr : queryResult) {
-                    std::cout << "Result size = " << queryResult.size() << "\n";
-                }
                 resultSet = std::move(ReturnResultSet(queryResult, tree.attributes, database.tables.at(tableID)));
                 std::cout << "SELECT FROM TABLE\n";
             }
@@ -436,21 +502,16 @@ int main() {
     CacheManagement cache;
     ResultSet result;
 
-    if(!EXECUTE(cache, "CREATE DATABASE Dudes", result)) {
+    if(!EXECUTE(cache, "CREATE DATABASE Dudes;", result)) {
         return 1;
     }
     COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
 
-    CONNECTION_STATUS status = CONNECT("Dudes", cache.database, globalDBHEADER, globalTBHEADER);
-    if(status == CONNECTION_STATUS::FAILED) {
-        std::cout << "Connection failed\n";
+    if(!EXECUTE(cache, "CONNECT Dudes;", result)) {
         return 1;
     }
-    if(status == CONNECTION_STATUS::NOT_EXISTS) {
-        std::cout << "Database does not Exist\n";
-        return 1;
-    }
-    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED NOT_NULL, grade DOUBLE)", result)) {
+
+    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED NOT_NULL, grade DOUBLE);", result)) {
         return 1;
     }
     COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
@@ -458,10 +519,10 @@ int main() {
     if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (6.7, 'Cocoloco')", result)) {
+    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (6.7, 'Very Cool Dude');", result)) {
         return 1;
     }
-    if(!EXECUTE(cache, "SELECT (id, name, grade) FROM cool_dudes", result)) {
+    if(!EXECUTE(cache, "SELECT * FROM cool_dudes;", result)) {
         return 1;
     }
 

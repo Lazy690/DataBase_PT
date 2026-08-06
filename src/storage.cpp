@@ -51,51 +51,6 @@ read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_
     }
 }
 
-template<typename T>
-bool compare(T RowValue, Conditional conditional, T value) {
-    if (conditional == Conditional::EQUAL) {
-        if(RowValue == value){
-            return true;
-        }
-        else {
-            return false;
-        } 
-    }
-    if (conditional == Conditional::GREATER) {
-        if(RowValue > value){
-            return true;
-        }
-        else {
-            return false;
-        } 
-    }
-    if (conditional == Conditional::LESSER) {
-        if(RowValue < value){
-            return true;
-        }
-        else {
-            return false;
-        } 
-    }
-    if (conditional == Conditional::GREATERorEQUAL) {
-        if(RowValue >= value){
-            return true;
-        }
-        else {
-            return false;
-        } 
-    }
-    if (conditional == Conditional::LESSERorEQUAL) {
-        if(RowValue <= value){
-            return true;
-        }
-        else {
-            return false;
-        } 
-    }
-    return false;
-};
-
 //index Declerations
 
 struct Node {

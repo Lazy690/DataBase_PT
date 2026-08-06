@@ -7,59 +7,36 @@
 #include <unordered_set>
 #include <variant>
 #include <memory>
+#include <span>
 
 #include "classes.h"
+#include "interpreter.hpp"
 
 /* -------------------------------------------------
  * ------     INTERPRETER CLASSES              -----
  * -------------------------------------------------*/
 
-enum class TokenType {
-    IDENTIFIER,
-    INT,
-    DOUBLE,
-    STRING,
-    OPERATOR,
-    END
-};
-
-enum class Action {
-    
-    CREATE,
-    DROP,
-    INSERT,
-    SELECT,
-    DELETE, 
-    UPDATE 
-
-};
-
-enum class CREATE_TYPE {
-    CREATE_DATABASE,
-    CREATE_TABLE,
-};
-enum class DROP_TYPE {
-    DROP_DATABASE,
-    DROP_TABLE,
-};
-
 const std::unordered_map<std::string, Action> ACTION_MAP = {
-    {"CREATE", Action::CREATE}, 
-    {"DROP",   Action::DROP}, 
-    {"INSERT", Action::INSERT}, 
-    {"SELECT", Action::SELECT}, 
-    {"DELETE", Action::DELETE}, 
-    {"UPDATE", Action::UPDATE}
+    {"CONNECT",    Action::CONNECT}, 
+    {"DISCONNECT", Action::DISCONNECT}, 
+    {"CREATE",     Action::CREATE}, 
+    {"DROP",       Action::DROP}, 
+    {"INSERT",     Action::INSERT}, 
+    {"SELECT",     Action::SELECT}, 
+    {"DELETE",     Action::DELETE}, 
+    {"UPDATE",     Action::UPDATE}
 };
 
 const std::unordered_map<std::string, DataType> DATATYPE_MAP = {
-    {"INT", DataType::INTEIRO}, 
-    {"TEXT", DataType::TEXTO}, 
+    {"INT",    DataType::INTEIRO}, 
+    {"TEXT",   DataType::TEXTO}, 
     {"DOUBLE", DataType::REAL}
 };
 
 std::unordered_set<std::string> KeyWords {
       
+      "CONNECT",
+      "DISCONNECT",
       "CREATE",
       "DROP",
       "TABLE",
@@ -86,7 +63,8 @@ std::unordered_set<std::string> KeyWords {
       ">=",
       "<=",
       ">",
-      "<"
+      "<",
+      ";"
 
 };
 std::unordered_set<std::string> Comparators {
@@ -107,214 +85,6 @@ std::unordered_set<std::string> constraints_set {
     "FOREIGN_KEY"
 };
 
-enum class ConnType {
-
-    AND,
-    OR,
-    NOT
-
-};
-
-struct Token {
-    TokenType type;
-    std::string value;
-};
-struct ValueToken : public Token {
-    DataType datatype;
-};
-
-struct Comparison {
-    Token attribute;
-    Token comparator;
-    Token value;
-};
-
-enum class Constraint {
-
-    UNIQUE,
-    AUTO_INCRIMENT,
-    NOT_NULL,
-    INDEXED,
-    PRIMARY_KEY,
-    FOREIGN_KEY
-
-};
-
-
-struct Clause;
-
-struct Connector {
-    ConnType type;
-    std::unique_ptr<Clause> next;
-};
-
-struct Clause {
-
-    bool is_negated = false;
-    Comparison comparison;
-    std::unique_ptr<Connector> connector;
-
-};
-
-//Linked list that alternates between Clause nodes and Connector nodes
-class Where_clause {
-    
-    private:
-        
-        std::unique_ptr<Clause> clause_head;
-        Clause *clause_tail;
-
-        Connector *connector_hold;
-
-    public:
-        enum class NodeType {
-            CLAUSE,
-            CONNECTOR
-        };
-
-        void flip(NodeType& t) {
-            if (t == NodeType::CLAUSE) t = NodeType::CONNECTOR;
-            else t = NodeType::CLAUSE;
-        }
-
-        NodeType tail_type = NodeType::CLAUSE;
-
-        Where_clause() : clause_head(nullptr), 
-                         clause_tail(nullptr),
-                         connector_hold(nullptr) {}
-
-        void append_clause(const Comparison& c, const bool is_negated) {
-            auto temp = std::make_unique<Clause>();
-            temp->comparison = c;
-            if(is_negated) {
-                temp->is_negated = true;
-            }
-            if (clause_head == nullptr) {
-                clause_head = std::move(temp);
-                clause_tail = clause_head.get();
-                flip(tail_type);
-            }
-            else {
-                connector_hold->next = std::move(temp);
-                clause_tail = connector_hold->next.get();
-                flip(tail_type);
-            }
-        }
-        void append_connector(const ConnType& t) {
-            auto temp = std::make_unique<Connector>();
-            temp->type = t;
-            
-            connector_hold = temp.get();
-            clause_tail->connector = std::move(temp);
-            flip(tail_type);
-        }
-        void print_clause() {
-            
-            NodeType current_type = NodeType::CLAUSE;
-            Clause *current_clause = clause_head.get();
-
-            while(true) {
-                
-                if(current_type == NodeType::CLAUSE) {
-                    if(current_clause->is_negated) {
-                        std::cout << "NOT ";
-                    }
-                    std::cout << current_clause->comparison.attribute.value << " " 
-                      << current_clause->comparison.comparator.value << " " 
-                      << current_clause->comparison.value.value << std::endl;
-                    flip(current_type);
-                    if(current_clause->connector == nullptr) {
-                        break;
-                    }
-
-                }
-                else if(current_type == NodeType::CONNECTOR) {
-                    switch(current_clause->connector->type) {
-
-                        case ConnType::AND:
-                            std::cout << "AND" << std::endl;
-                            break;
-                        case ConnType::OR:
-                            std::cout << "OR" << std::endl;
-                            break;
-
-                    }
-                    
-                    current_clause = current_clause->connector->next.get();
-                    flip(current_type);
-                }
-            }
-          
-        }
-
-};
-
-
-struct Column_AST {
-
-    Token name;
-    DataType type;
-    Constraints_list constraints;
-
-};
-
-
-struct CREATE_AST {
-
-    CREATE_TYPE type;
-    bool is_overrite = true;
-    Token subject;
-    std::vector<Column_AST> columns;  
-
-};
-
-struct DROP_AST {
-    
-    DROP_TYPE type;
-    Token subject;
-
-};
-
-struct INSERT_AST {
-
-    Token table;
-    std::vector<Token> attributes;
-    std::vector<Token> values;
-
-};
-
-struct SELECT_AST {
-
-    Token table;
-    std::vector<Token> attributes;
-    std::unique_ptr<Where_clause> where_clauses;
-
-};
-
-struct DELETE_AST {
-
-    Token table;
-    std::unique_ptr<Where_clause> where_clauses;
-    
-};
-
-struct UPDATE_AST {
-
-    Token table;
-    std::vector<Comparison> set;
-    std::unique_ptr<Where_clause> where_clauses;
-
-};
-
-struct AbstractSyntaxTree {
-    Action action;
-    std::variant<CREATE_AST, 
-                 DROP_AST,
-                 INSERT_AST, 
-                 SELECT_AST, 
-                 DELETE_AST, 
-                 UPDATE_AST> tree;
-};
 
 bool isInVector(const std::string& value, std::vector<std::string> v) {
     auto it = std::find(v.begin(), v.end(), value);
@@ -421,7 +191,15 @@ std::vector<Token> TOKENIZE(const std::string& input) {
             continue;
         }
 
+        // 7 end
+        if(c == ';') {
+            current = ";";
+            tokens.push_back({TokenType::END, current});
+            break;
+        }
+
         // 7 Unknown character
+        std::cout << "Character: " << c << "\n";
         throw std::runtime_error("Unknown character detected.");
     }
     
@@ -430,9 +208,9 @@ std::vector<Token> TOKENIZE(const std::string& input) {
     //    cout << static_cast<int>(t.type) << " : " << t.value << endl;
     //}
     
-    tokens.push_back({TokenType::END, ""});
+    //tokens.push_back({TokenType::END, ""});
     return tokens;
-}           
+}
 
 struct Cursor  {
     int index = 0;
@@ -483,6 +261,70 @@ struct Cursor  {
     }
 };
 
+/*
+enum class ConnType {
+
+    AND,
+    OR,
+    NOT
+
+};
+
+struct Clause {
+    virtual ~Expression() = default;
+};
+
+struct Comparison : Clause {
+    Token attribute;
+    Token comparator;
+    Token value;
+};
+
+struct Logical : Clause {
+
+    ConnType op;
+
+    std::unique_ptr<Clause> left;
+    std::unique_ptr<Clause> right;
+
+};
+
+struct Not : Clause {
+    std::unique_ptr<Clause> clause;
+};
+
+Comparison handle_comparison(Cursor& cursor) {
+    Comparison comp;
+    if(isKeyWord(cursor.peek())) throw("Expected Attribute name in Comparoson");
+    comp.attribute = cursor.consume();
+    if(!isKeyComparator(cursor.peek())) throw("Expected comparison Token after Attribute decleration");
+    comp.comparator = cursor.comsume();
+    if(isKeyWord(cursor.peek())) throw("Expected Value after comparison Token");
+    comp.value = cursor.consume();
+    return comp;
+}
+
+std::unique_ptr<Clause> Handle_Clauses(std::span<Token> tokens) {
+    Cursor cursor;
+    cursor.tokens.assign(tokens.begin(), tokens.end());
+    if(isKeyWord(cursor.Tokens[0])) throw("Expected Comparison expression after 'WHERE' Token");
+    if(cursor.Tokens[0].value == ")") throw("Expected Comparison expression after 'WHERE' Token");
+
+    while(cursor.index != cursor.tokens.size()) {
+        auto root = std::unique_ptr<Comparison>(handle_comparison(cursor));
+
+    }
+}
+*/
+
+
+
+
+
+
+
+
+
 
 
 
@@ -503,7 +345,6 @@ Comparison return_comparison(Cursor& cursor) {
     if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected attribute in 'WHERE' clause");
     comp.attribute = cursor.consume();
     if(!isKeyComparator(cursor.peek())) {
-        std::cout << "Comparator: " << cursor.peek() << "\n";
         throw std::runtime_error("Expected comparator token after attribute declaration in 'WHERE' clause");
     }
     comp.comparator = cursor.consume();
@@ -703,6 +544,24 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
     
     switch(AST.action) {
 
+        case Action::CONNECT:
+            {
+                CONNECT_AST connect;
+                if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected Database name after token 'CONNECT'");
+                connect.database = cursor.consume();
+                if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
+                AST.tree = std::move(connect);
+                break;
+            }
+        case Action::DISCONNECT:
+            {
+                DISCONNECT_AST disconnect;
+                if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected Database name after token 'DISCONNECT'");
+                disconnect.database = cursor.consume();
+                if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
+                AST.tree = std::move(disconnect);
+                break;
+            }
         case Action::CREATE:
             {
         
@@ -722,7 +581,7 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             if(create.type == CREATE_TYPE::CREATE_DATABASE) {
                 if (!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command"); 
                 AST.tree = std::move(create);
-                return AST;
+                break;
             }
             
             if(cursor.match("IF")) {
@@ -895,9 +754,6 @@ void print_attributes(std::vector<Token> a) {
 
 template<typename T>
 void print_AST(const T& ast) {
-     
-    
-    
     if constexpr (std::is_same_v<T, CREATE_AST>) {
         if (ast.type == CREATE_TYPE::CREATE_DATABASE) {
             std::cout << "Creating Database: " << ast.subject.value << "\n";
@@ -933,7 +789,6 @@ void print_AST(const T& ast) {
         std::cout << "Table: " << ast.table.value << std::endl;
         print_set(ast.set);
     }
-    
     if constexpr (std::is_same_v<T, UPDATE_AST> || std::is_same_v<T, SELECT_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
         if(ast.where_clauses == nullptr) return;
