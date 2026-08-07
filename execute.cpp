@@ -5,6 +5,7 @@
 #include "interpreter.hpp"
 #include "src/filesys.hpp"
 #include "src/storage.hpp"
+#include "headers.hpp"
 
 DB_Header globalDBHEADER{0x44415641, 3};
 TB_Header globalTBHEADER{0x44415441, 5};
@@ -353,11 +354,16 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                 std::vector<Column> columns = ConvertToColumns(tree.columns);
                 assert(!columns.empty());
                 bool will_overrite = tree.is_overrite;
+                if(will_overrite) {
+                    std::cout << "TABLE EXISTS\n";
+                    return true;
+                }
 
-                if(!CREATE_TABLE(database, globalTBHEADER, table_name, columns, will_overrite)) {
+                if(!CREATE_TABLE(database, globalTBHEADER, globalRBHEADER, table_name, columns, will_overrite)) {
                     return false;
                 }
                 else {
+                    COMMIT_DATABASE_DATA(database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
                     std::cout << "CREATE TABLE\n";
                 }
             }
@@ -389,6 +395,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                     return false;
                 }
                 else {
+                    pager.tableMetadata.erase(database.id_lookup.at(table_name));
                     std::cout << "DROP TABLE\n";
                 }
             }
@@ -412,11 +419,14 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             }
             uint32_t tableID = database.id_lookup.at(tree.table.value);
 
-            if(!loadTableFile(manager, database.tables.at(tableID))) {
-                return false;
-            }
-            if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
-                return false;
+            auto it2 = pager.tableMetadata.find(tableID);
+            if(it2 == pager.tableMetadata.end()) {
+                if(!loadTableFile(manager, database.tables.at(tableID))) {
+                    return false;
+                }
+                if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
+                    return false;
+                }
             }
 
             INSERT_DATA* current = tree.root.get();
@@ -460,11 +470,14 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             }
             uint32_t tableID = database.id_lookup.at(tree.table.value);
 
-            if(!loadTableFile(manager, database.tables.at(tableID))) {
-                return false;
-            }
-            if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
-                return false;
+            auto it = pager.tableMetadata.find(tableID);
+            if(it == pager.tableMetadata.end()) {
+                if(!loadTableFile(manager, database.tables.at(tableID))) {
+                    return false;
+                }
+                if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
+                    return false;
+                }
             }
             
             if(tree.attributes[0].value != "*") {
@@ -479,7 +492,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             else assert(tree.attributes.size() == 1);
 
             std::vector<Row> queryResult;
-            std::cout << "Loaded metadata pagecount: " << pager.tableMetadata[tableID].PAGECOUNT << "\n";
+            //std::cout << "Loaded metadata pagecount: " << pager.tableMetadata[tableID].PAGECOUNT << "\n";
             if(!SELECT(manager.files.at(tableID), queryResult, tableID, logger, pager)) {
                 return false;
             }
@@ -514,7 +527,6 @@ int main() {
     if(!EXECUTE(cache, "CREATE DATABASE Dudes;", result)) {
         return 1;
     }
-    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
 
     if(!EXECUTE(cache, "CONNECT Dudes;", result)) {
         return 1;
@@ -523,14 +535,14 @@ int main() {
     if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED NOT_NULL, grade DOUBLE);", result)) {
         return 1;
     }
-    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
-
-    if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
+    if(!START(cache.database, cache.manager, cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Johan', 6.9), ('dude', 6.7), ('ellie', 1.8));", result)) {
+    if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Markiemoo', 6.9), ('Cameleon', 6.7), ('Larry', 1.8));", result)) {
         return 1;
     }
+    //std::cout << "Crashing now\n";
+    //return 0;
     if(!EXECUTE(cache, "SELECT * FROM cool_dudes;", result)) {
         return 1;
     }
@@ -544,8 +556,7 @@ int main() {
         std::cout << " id: " << id << "\n name: " << name << "\n grade: " << grade << "\n";
     }
     std::cout << "------------------\n";
-    COMMIT_DATABASE_DATA(cache.database, globalTBHEADER, globalDBHEADER, globalRBHEADER);
-    if(!COMMIT(cache.manager, cache.logger, cache.pager)) {
+    if(!COMMIT(cache.database, cache.manager, cache.logger, cache.pager, globalTBHEADER, globalDBHEADER, globalRBHEADER)) {
         return 1;
     }
 

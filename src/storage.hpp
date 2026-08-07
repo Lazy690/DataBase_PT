@@ -185,8 +185,8 @@ struct Logger {
 
     std::unordered_set<PageKey, PageKeyHash> flushed_beforeImages;
 
-    std::fstream LoggerFile;
-    std::fstream BeforeImageLogFile;
+    std::fstream* LoggerFile;
+    std::fstream* BeforeImageLogFile;
 
     Transaction transaction;
 
@@ -195,8 +195,12 @@ struct Logger {
 //File Manager
 
 struct FileManager {
+
     using tableID = uint32_t;
     std::unordered_map<tableID, std::fstream> files;
+    std::fstream LoggerFile;
+    std::fstream BeforeImageLogFile;
+
 };
 
 //Queries
@@ -274,8 +278,9 @@ struct ScanResult {
 };
 bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value);
 
-bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader);
-bool COMMIT(FileManager& manager, Logger& logger, Pager& pager);
+bool START(const DataBase& database, FileManager& manager, Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader);
 
+bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pager,
+            TB_Header& globalTBHEADER, DB_Header& globalDBHEADER, RecordHeader& globalRBHEADER);
 bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, Row& row);
 bool SELECT(std::fstream& file, std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager& pager, QueryParams* params = nullptr);

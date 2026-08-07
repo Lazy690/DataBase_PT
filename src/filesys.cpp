@@ -15,6 +15,7 @@
 
 #include "../classes.h"
 #include "filesys.hpp"
+#include "storage.hpp"
 
 namespace fs = std::filesystem;
 
@@ -380,7 +381,7 @@ bool load_database_data(std::fstream& file, DataBase& database, DB_Header& globa
             std::cerr << "Failed to load table ID when loading database data\n";
             return false;
         }
-        std::cout << "ID: " << id << "\n";
+        //std::cout << "ID: " << id << "\n";
         Table table;
         fs::path path = cwd;
         path /= std::to_string(id);
@@ -483,7 +484,7 @@ bool delete_table_folder(fs::path dir) {
     */
     if (!fs::exists(dir)) return true;
     fs::remove_all(dir);
-    return true;
+
 }
 
 bool COMMIT_DATABASE_DATA(const DataBase& database, const TB_Header& globalTableHeader, const DB_Header& globalDatabaseHeader, const RecordHeader& globalRecordHeader) {
@@ -542,6 +543,12 @@ bool CREATE_DATABASE(std::string input_DBname, DB_Header& globalHeader) {
         };
     }
 
+    fs::path backup_path = BASE_DIRECTORY;
+    backup_path /= BACKUPFOLDER_NAME;
+    if(!fs::exists(backup_path)) {
+        fs::create_directory(backup_path);;
+    }
+
     return true;
 }
 
@@ -584,7 +591,7 @@ CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Heade
     return CONNECTION_STATUS::CONNECTED;
 }
 
-bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites) {
+bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, RecordHeader& globalRBHEADER, std::string table_name, std::vector<Column> columns, bool overrites) {
     
     Table table;
     table.header.MAGIC   = globalHeader.MAGIC;
@@ -634,6 +641,12 @@ bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string
     database.created_tables.insert(table.header.ID);
     database.droped_tables.erase(table.header.ID);
 
+    /*
+    if(!createRecordBankFile(table.path, globalRBHEADER)) {
+        return false;
+    }
+    */
+
     return true;
 }
 bool DROP_TABLE(DataBase& database, std::string table_name) {
@@ -655,15 +668,14 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
     return true;
 }
 
+/*
 int test_fs() {
     std::string name = "WorkSpace";
 
-    /*
     if(!CREATE_DATABASE("WorkSpace", globalDBHEADER)) {
         std::cerr << "CREATE DATABASE command failed to execute." << std::endl;
         return 1;
     }
-    */
 
     DataBase database;
     
@@ -695,12 +707,10 @@ int test_fs() {
         std::cerr << "CREATE TABLE command failed to execute." << std::endl;
         return 1;
     }
-    /*
     if(!DROP_TABLE(database, "dudes")) { 
         std::cerr << "DROP TABLE command failed to execute." << std::endl;
         return 1;
     }
-    */
 
     if(!COMMIT_DATABASE_DATA(database, globalTBHEADERf, globalDBHEADERf, globalRBHEADERf)) {
         std::cerr << "Failed to commit changes\n";
@@ -710,5 +720,6 @@ int test_fs() {
     std::cout << "Worked\n";
     return 0; 
 }
+*/
 
 

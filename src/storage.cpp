@@ -18,6 +18,7 @@
 #include "classes.h"
 #include "filesys.hpp"
 #include "storage.hpp"
+#include "../headers.hpp"
 
 
 
@@ -85,7 +86,8 @@ struct Indexer {
 
 std::fstream openFile(const std::filesystem::path path, std::string fileName) {
     std::fstream file(std::filesystem::path(path) / fileName, std::ios::binary | std::ios::in | std::ios::out);
-    assert(file.is_open());
+    //temporary commented assert
+    //assert(file.is_open());
     return file;
 }
 
@@ -526,14 +528,14 @@ bool evictPage(std::fstream& file, Pager& pager, Logger* logger = nullptr) {
 
     if(page->dirty) {
         if(logger != nullptr) {
-            assert(logger->LoggerFile.is_open());
-            if(!flush_logger_header(logger->LoggerFile, logger->header)) {
+            assert(logger->LoggerFile->is_open());
+            if(!flush_logger_header(*logger->LoggerFile, logger->header)) {
                 std::cerr << "Failed to flush logger's header when evicting page\n";
                 return false;
             }
             //std::cout << "flushing logger: " << key.pageID << " When evicting\n";
             uint32_t flush_offset = logger->header.LatestCheckpointOffset;
-            if(!flush_transaction(logger->LoggerFile, logger->transaction, flush_offset)) {
+            if(!flush_transaction(*logger->LoggerFile, logger->transaction, flush_offset)) {
                 std::cerr << "Failed to flush logger when evicting page\n";
                 return false;
             }
@@ -956,12 +958,12 @@ void AppendLog(Logger& logger, Log& log) {
 }
 bool AppendBeforeImage(Logger& logger, BeforeImage& before) {
 
-    if(!flush_beforeImage(logger.BeforeImageLogFile, before)) {
+    if(!flush_beforeImage(*logger.BeforeImageLogFile, before)) {
         return false;
     }
 
     logger.beforeImageHeader.PAGECOUNT++;
-    if(!flush_beforeImage_header(logger.BeforeImageLogFile, logger.beforeImageHeader)) {
+    if(!flush_beforeImage_header(*logger.BeforeImageLogFile, logger.beforeImageHeader)) {
         return false;
     }
 
@@ -1127,14 +1129,15 @@ void printLog(Log& log) {
 // Recovery Section
 //===================================
 
-bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
-    std::cout << "REDO\n";
+bool REDO(const DataBase& database, FileManager& manager, uint32_t NumLogs, const std::vector<char>& buff) {
+    //std::cout << "REDO\n";
 
     using LatestLSNCount = uint32_t;
     using tableID        = uint32_t;
     Pager pager;
 
     std::unordered_map<tableID, LatestLSNCount> tableLSNs;
+    
     auto cursor = buff.begin();
 
     for(size_t i = 0; i < NumLogs; i++) {
@@ -1151,7 +1154,16 @@ bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
         cursor += logPtr->size();
         Log log = *logPtr;
 
-        Page* page = requestPage(file, pager, log.ID);
+        auto it = database.tables.find(log.ID.tableID);
+        if(it == database.tables.end()) {
+            std::cerr << "Table not found when REDO ing\n";
+            return false;
+        }
+        if(!loadTableFile(manager, it->second)){
+            std::cerr << "Failed to load Table file when REDO ing\n";
+            return false;
+        }
+        Page* page = requestPage(manager.files.at(log.ID.tableID), pager, log.ID);
         if(!page) {
             //std::cerr << "Repairing page\n";
             Page newPage = create_page(log.ID.pageID);
@@ -1173,27 +1185,51 @@ bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
         page->header = log.pageHeader;
         insertRowIntoBuff(page->buffer, log.row, log.offset);
         page->header.LSN = log.LSN;
+
         tableLSNs[log.ID.tableID] = log.LSN;
     }
     for (auto& [key, page] : pager.pages) {
-        if(!flush_page(file, page)) {
+        auto it = database.tables.find(key.tableID);
+        if(it == database.tables.end()) {
+            std::cerr << "Table not found when REDO ing\n";
+            return false;
+        }
+        std::cout << "Its this: \n";
+        if(!loadTableFile(manager, it->second)){
+            std::cerr << "Failed to load Table file when REDO ing\n";
+            return false;
+        }
+        std::cout << "Never mind\n";
+
+        if(!flush_page(manager.files.at(key.tableID), page)) {
             std::cerr << "failed to flush page: " << page.header.id << "\n";
             return false;
         };
     }
 
     //Repair Files metadata
-    for (const auto& [id, latestLSN] : tableLSNs) {
+    for (const auto& [tableID, latestLSN] : tableLSNs) {
         RecordHeader this_header;
-        if(!load_RecordBank_header(file, this_header, id)) {
+
+        auto it = database.tables.find(tableID);
+        if(it == database.tables.end()) {
+            std::cerr << "Table not found when REDO ing\n";
+            return false;
+        }
+        if(!loadTableFile(manager, it->second)){
+            std::cerr << "Failed to load Table file when REDO ing\n";
+            return false;
+        }
+
+        if(!load_RecordBank_header(manager.files.at(tableID), this_header, tableID)) {
             std::cout << "Failed to load metadata while Repairing header\n";
             return false;
         };
         //temporary
-        this_header.PAGECOUNT = count_pages(file);
+        this_header.PAGECOUNT = count_pages(manager.files.at(tableID));
 
         this_header.LatestLSN = latestLSN;
-        if(!flush_metadata(file, this_header)) {
+        if(!flush_metadata(manager.files.at(tableID), this_header)) {
             std::cout << "Failed to flush repaired metadata while Repairing header\n";
             return false;
         }
@@ -1202,47 +1238,35 @@ bool REDO(std::fstream& file, uint32_t NumLogs, const std::vector<char>& buff) {
     return true;
 }
 
-bool UNDO(std::fstream& Imagefile, std::fstream& DataFile, uint32_t ImageCount, uint32_t RHPAGECOUNT) {
-    std::cout << "UNDO\n";
-    std::vector<Page> befores;
- 
-    for(size_t index = 0; index < ImageCount; index++) {
+bool UNDO(const DataBase& database) {
+    
+    std::filesystem::path backup_path = BASE_DIRECTORY;
+    backup_path /= BACKUPFOLDER_NAME;
+    backup_path /= database.name;
 
-        auto beforeptr = load_beforeImage(Imagefile, index);
-        if (!beforeptr) {
-            return false;
-        }
-        BeforeImage before = *beforeptr;
-        befores.push_back(before.page);
-
+    if(!fs::exists(backup_path)) {
+        std::cerr << "Cannot recover database as the recovery folder must have been deleted\n";
+        std::cerr << "Database data may be heavily corrupted\n";
+        return false;
     }
-    uint32_t RepairedSize = sizeof(RecordHeader) + RHPAGECOUNT * (sizeof(PageHeader) + PAGE_SIZE);
-    //Temporary
-    std::filesystem::resize_file("data.bin", RepairedSize);
 
-    for (auto& image : befores) {
+    fs::path new_folder_path = BASE_DIRECTORY;
+    new_folder_path /= database.name;
 
-        if(!flush_page(DataFile, image)) {
-            std::cerr << "failed to flush page: " << image.header.id << "\n";
-            return false;
-        };
-    }
+    fs::remove_all(database.baseDir);
+    fs::copy(backup_path, new_folder_path, fs::copy_options::recursive);
+    fs::remove_all(backup_path);
+
     return true;
 }
 
-bool SYNC(LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
-    //!!!!!!Temporary!!!!!!
-    std::fstream DataFile("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    std::fstream LogFile("logger.bin", std::ios::binary | std::ios::out | std::ios::in);
-    std::fstream BeforeImageLogFile("beforeImage.bin", std::ios::binary | std::ios::in | std::ios::out);
-    ///////////////////////
-    if (!DataFile) {
-        std::cerr << "Failed to open data.bin\n";
-        return false;
-    }
+bool SYNC(const DataBase& database, FileManager& manager, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
+
+    std::fstream LogFile(std::filesystem::path(BASE_DIRECTORY) / LOGGER_FILENAME, std::ios::binary | std::ios::in | std::ios::out);
+    std::fstream BeforeImageLogFile(std::filesystem::path(BASE_DIRECTORY) / BEFOREIMAGE_FILENAME, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+
     if (!LogFile) {
-        std::cerr << "Failed to open logger.bin\n";
-        return false;
+        return true;
     }
 
     Logger logger;
@@ -1280,6 +1304,7 @@ bool SYNC(LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
     if(logger.transaction.header.commited) {
 
         checkPointOffs += sizeof(logger.transaction.header);
+
         if(!load_transaction_logs(LogFile, checkPointOffs, TxId, logger.transaction)) {
             return false;
         }
@@ -1287,42 +1312,23 @@ bool SYNC(LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
         assert(logger.transaction.buffer.size() > 0);
         std::cout << "buff size: " << logger.transaction.buffer.size() << "\n";
 
-        if(!REDO(DataFile, logger.transaction.header.NumLogs, logger.transaction.buffer)) {
+        if(!REDO(database, manager, logger.transaction.header.NumLogs, logger.transaction.buffer)) {
             return false;
         };
     }
     else {
-
-        if (!BeforeImageLogFile) {
-            std::cerr << "Failed to open beforeImage.bin\n";
-            return false;
-        }
-        BeforeImageHeader beforeHeader;
-        if(!requestBeforeImageHeader(BeforeImageLogFile, globalImageHeader, beforeHeader)) {
-            return false;
-        }
-        RecordHeader header;
-        //the 1 is temporary
-        uint32_t tempID = 1;
-        if(!load_RecordBank_header(DataFile, header, tempID)) {
-            return false;
-        }
-
-        if(!UNDO(BeforeImageLogFile, DataFile, beforeHeader.PAGECOUNT, header.PAGECOUNT)) {
+        if(!UNDO(database)) {
             return false;
         };
-
     }
 
     get_logger_checkpoint(LogFile, logger.header);
-    std::cout << "syncing checkpoint: " << logger.header.LatestCheckpointOffset << "\n";
+    //std::cout << "syncing checkpoint: " << logger.header.LatestCheckpointOffset << "\n";
 
     if(!flush_logger_header(LogFile, logger.header)) {
         return false;
     }
 
-    BeforeImageLogFile.close();
-    DataFile.close();
     return true;
 }
 
@@ -1619,7 +1625,18 @@ bool load_tree() {
 // Command Section
 //===================================
 
-bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
+bool START(const DataBase& database, FileManager& manager, Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader) {
+
+    manager.LoggerFile.close();
+    manager.BeforeImageLogFile.close();
+    logger.LoggerFile = nullptr;
+    logger.BeforeImageLogFile = nullptr;
+    logger.transaction = {};
+
+    if(!SYNC(database, manager, globalLogHeader, globalImageHeader)) {
+        return false;
+    }
+
     logger.transaction.start = true;
 
     std::fstream LoggerFile(std::filesystem::path(BASE_DIRECTORY) / LOGGER_FILENAME, std::ios::binary | std::ios::in | std::ios::out);
@@ -1631,7 +1648,6 @@ bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& glo
             return false;
         }
     }
-    std::fstream BeforeImageLogFile(std::filesystem::path(BASE_DIRECTORY) / BEFOREIMAGE_FILENAME, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
 
     if(!requestLoggerHeader(LoggerFile, globalLogHeader, logger.header)) {
         return false;
@@ -1646,7 +1662,7 @@ bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& glo
     if(logger.header.LatestCheckpointOffset == 0) logger.header.LatestCheckpointOffset += sizeof(LoggerHeader);
 
     get_logger_checkpoint(LoggerFile, logger.header);
-    std::cout << "starting checkpoint: " << logger.header.LatestCheckpointOffset << "\n";
+    //std::cout << "starting checkpoint: " << logger.header.LatestCheckpointOffset << "\n";
 
     if(!flush_transaction_header(LoggerFile, logger.transaction, logger.header.LatestCheckpointOffset)) {
         return false;
@@ -1658,36 +1674,44 @@ bool START(Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& glo
     if(!flush_logger_header(LoggerFile, logger.header)) {
         return false;
     }
+  
+    std::filesystem::path backup_path = BASE_DIRECTORY;
+    backup_path /= BACKUPFOLDER_NAME;
+    fs::create_directory(fs::path(backup_path) / database.name);
+    backup_path /= database.name;
 
-    logger.beforeImageHeader.MAGIC   = globalImageHeader.MAGIC;
-    logger.beforeImageHeader.VERSION = globalImageHeader.VERSION;
+    std::string dbName = database.name;
+    fs::path db_path = BASE_DIRECTORY;
+    db_path /= dbName;
+    std::filesystem::copy(db_path, backup_path, fs::copy_options::recursive);
 
-    if(!flush_beforeImage_header(BeforeImageLogFile, globalImageHeader)) {
-        return false;
-    }
-
-    logger.LoggerFile = std::move(LoggerFile);
-    logger.BeforeImageLogFile = std::move(BeforeImageLogFile);
+    manager.LoggerFile = std::move(LoggerFile);
+    logger.LoggerFile = &manager.LoggerFile;
 
     return true;
 }
 
-bool COMMIT(FileManager& manager, Logger& logger, Pager& pager) {
-    
+bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pager,
+            TB_Header& globalTBHEADER, DB_Header& globalDBHEADER, RecordHeader& globalRBHEADER) {
+
     assert(logger.transaction.start);
     assert(!logger.transaction.header.commited);
     
     //Simulated crash
     //return false;
 
-    if(!flush_logger_header(logger.LoggerFile, logger.header)) {
+    if(!COMMIT_DATABASE_DATA(database, globalTBHEADER, globalDBHEADER, globalRBHEADER)){
+        return false;
+    }
+
+    if(!flush_logger_header(*logger.LoggerFile, logger.header)) {
         std::cerr << "Failed to flush logger's header\n";
         return false;
     }
 
     logger.transaction.header.commited = true;
     uint32_t flush_offset = logger.header.LatestCheckpointOffset;
-    if(!flush_transaction(logger.LoggerFile, logger.transaction, flush_offset)) {
+    if(!flush_transaction(*logger.LoggerFile, logger.transaction, flush_offset)) {
         return false;
     }
 
@@ -1719,7 +1743,15 @@ bool COMMIT(FileManager& manager, Logger& logger, Pager& pager) {
         flush_metadata(file, pager.tableMetadata[id]);
     }
     EmptyLogger(logger);
-    std::filesystem::remove_all(std::filesystem::path("../beforeImage.bin"));
+
+    std::filesystem::path backup_path = BASE_DIRECTORY;
+    backup_path /= BACKUPFOLDER_NAME;
+    backup_path /= database.name;
+
+    std::filesystem::remove_all(backup_path);
+
+    logger.transaction = {};
+
     return true;
 }
  

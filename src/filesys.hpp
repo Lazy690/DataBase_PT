@@ -83,9 +83,11 @@ const std::string RECORDBANK_FILENAME = "data.bin";
 const std::string LOGGER_FILENAME = "logger.bin";
 const std::string BEFOREIMAGE_FILENAME = "beforeImage.bin";
 
+const std::string BACKUPFOLDER_NAME = "backup";
+
 const fs::path BASE_DIRECTORY = fs::path("..");
 
 CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Header& globalDatabaseHeader, TB_Header& globalTableHeader);
-bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, std::string table_name, std::vector<Column> columns, bool overrites);
+bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, RecordHeader& globalRBHEADER, std::string table_name, std::vector<Column> columns, bool overrites);
 bool DROP_TABLE(DataBase& database, std::string table_name);
 void printDataBase(const DataBase& database);
