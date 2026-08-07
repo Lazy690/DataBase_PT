@@ -148,6 +148,9 @@ bool VerifyUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t
 }
 bool EnforceColumnIntegrety(const std::vector<Token>& attributes, const std::vector<Token> values, const Table& table) {
     try {
+        if(attributes.size() != values.size()) {
+            throw std::runtime_error("Column count and Values count do not corelate");
+        }
         for(size_t i = 0; i < attributes.size(); i++) {
             if(!VerifyColumnName(attributes[i], table)) return false;
             if(!VerifyTypeIntegrety(attributes[i], values[i], table)) return false;
@@ -394,7 +397,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
         }
         case Action::INSERT: 
         {
-            INSERT_AST tree = std::get<INSERT_AST>(AST.tree);
+            INSERT_AST tree = std::move(std::get<INSERT_AST>(AST.tree));
             if(!database.connected) {
                 std::cerr << "Cannot INSERT INTO TABLE while not connected to any DATABASE\n";
                 return false;
@@ -415,30 +418,36 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
                 return false;
             }
-            if(!EnforceColumnIntegrety(tree.attributes, tree.values, database.tables.at(tableID))) {
-                return false;
-            }
 
-            sortRowTokens(tree.values, tree.attributes, database.tables.at(tableID));
-
-            if(!EnforceIntegretyList(manager.files.at(tableID), pager, database.tables.at(tableID), tree.attributes, tree.values)) {
-                return false;
-            }
-            if(!handleAutoInciment(database.tables.at(tableID), tree.attributes, tree.values)) {
-                return false;
-            }
-
-            Row row = ConvertToRow(tree.values);
+            INSERT_DATA* current = tree.root.get();
             
-            //Temporary
-            //printRow(row);
+            while(current != nullptr) {
 
-            if(!INSERT(manager.files.at(tableID), tableID, pager, logger, row)) {
-                return false;
+                std::vector<Token> values = std::move(current->tokens);
+                
+                if(!EnforceColumnIntegrety(tree.attributes, values, database.tables.at(tableID))) {
+                    return false;
+                }
+                sortRowTokens(values, tree.attributes, database.tables.at(tableID));
+                if(!EnforceIntegretyList(manager.files.at(tableID), pager, database.tables.at(tableID), tree.attributes, values)) {
+                    return false;
+                }
+                if(!handleAutoInciment(database.tables.at(tableID), tree.attributes, values)) {
+                    return false;
+                }
+                Row row = ConvertToRow(values);
+                
+                //Temporary
+                //printRow(row);
+
+                if(!INSERT(manager.files.at(tableID), tableID, pager, logger, row)) {
+                    return false;
+                }
+                INSERT_DATA* hold = current->next.get();
+                current = hold;
             }
-            else {
-                std::cout << "INSERT TABLE\n";
-            }
+
+            std::cout << "INSERT TABLE\n";
 
             break;
         }
@@ -519,7 +528,7 @@ int main() {
     if(!START(cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    if(!EXECUTE(cache, "INSERT (grade, name) INTO cool_dudes VALUES (6.7, 'Very Cool Dude');", result)) {
+    if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Johan', 6.9), ('dude', 6.7), ('ellie', 1.8));", result)) {
         return 1;
     }
     if(!EXECUTE(cache, "SELECT * FROM cool_dudes;", result)) {

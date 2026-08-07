@@ -106,7 +106,7 @@ class Where_clause {
         NodeType tail_type = NodeType::CLAUSE;
 
         Where_clause() : clause_head(nullptr), 
-                        clause_tail(nullptr),
+                         clause_tail(nullptr),
                          connector_hold(nullptr) {}
 
         void append_clause(const Comparison& c, const bool is_negated) {
@@ -207,11 +207,16 @@ struct DROP_AST {
 
 };
 
+struct INSERT_DATA {
+    bool is_root = false;
+    std::vector<Token> tokens;
+    std::unique_ptr<INSERT_DATA> next;
+};
 struct INSERT_AST {
 
     Token table;
     std::vector<Token> attributes;
-    std::vector<Token> values;
+    std::unique_ptr<INSERT_DATA> root;
 
 };
 

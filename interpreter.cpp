@@ -243,6 +243,7 @@ struct Cursor  {
         return consume();
     }
     bool is_END() {
+        if(index >= tokens.size()) return false;
         if(tokens[index].type == TokenType::END) return true;
         return false;
     }
@@ -353,7 +354,6 @@ Comparison return_comparison(Cursor& cursor) {
 
     return comp;
 }
-
 std::vector<Token> handle_parenthesis(Cursor& cursor) {
       
       std::vector<Token> values;
@@ -373,6 +373,54 @@ std::vector<Token> handle_parenthesis(Cursor& cursor) {
       }
       cursor.skip();
       return values;
+}
+
+//((1, 'dude', 6.9), (2, 'Johan', 6.7), (3, 'barkdude', 1.8));
+std::unique_ptr<INSERT_DATA> handle_Values_parenthesis(Cursor& cursor, bool is_outer = true) {
+
+      auto insertData = std::make_unique<INSERT_DATA>();
+      if(is_outer) insertData->is_root = true;
+      INSERT_DATA* tail = insertData.get();
+      bool expect_value = true; 
+      int count = 0;
+      while(!cursor.match(")")) {
+          if(expect_value) {
+              if(cursor.peek() == "(" && !is_outer) {
+                  throw("Cannot Open '(' inside an inner Parenthesis");
+              }
+              if(cursor.match("(")) {
+                  INSERT_DATA* hold;
+                  auto temp = std::make_unique<INSERT_DATA>();
+                  temp = std::move(handle_Values_parenthesis(cursor, false));
+                  if (is_outer && insertData->is_root) {
+                      insertData = std::move(temp);
+                      tail = insertData.get();
+                      expect_value = false;
+                      continue;
+                  }
+                  else {
+                      tail->next = std::move(temp);
+                  }
+                  hold = tail->next.get();
+                  tail = hold;
+
+                  expect_value = false;
+                  continue;
+              }
+              insertData->tokens.push_back(cursor.consume());
+              expect_value = false;
+
+          }
+          else {
+              if(cursor.peek() != ",") throw std::runtime_error("Expected ',' between values");
+              cursor.skip();
+              expect_value = true;
+          }
+          if((cursor.index == cursor.tokens.size()) && !cursor.is_END()) {
+              throw("Parenthesis Token '(' was never closed");
+          }
+      }
+      return insertData;
 }
 
 std::vector<Comparison> handle_set(Cursor& cursor) {
@@ -637,9 +685,10 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
 
             cursor.expect("VALUES");
             cursor.expect("(");
-            insert.values = handle_parenthesis(cursor);
+
+            insert.root = std::move(handle_Values_parenthesis(cursor));
+
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
-            if(insert.attributes.size() != insert.values.size()) throw std::runtime_error("Attributes and value counts do not corelate");
             AST.tree = std::move(insert);
             }
             break;
@@ -712,45 +761,54 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
 }
 
 void print_attributes(std::vector<Token> a) {
-            std::cout << "Attributes: " << std::endl;
-            for(auto att : a) {
-                std::cout << att.value << std::endl;
-            }
+    std::cout << "Attributes: " << std::endl;
+    for(auto att : a) {
+        std::cout << att.value << std::endl;
+    }
+}
+void print_set(std::vector<Comparison> s) {
+    std::cout << "SET: " << std::endl;
+    for(auto comp : s) {
+        std::cout << comp.attribute.value << " "
+          << comp.comparator.value << " "
+          << comp.value.value << std::endl;
+    }
+}
+void print_values(const std::unique_ptr<INSERT_DATA>& root) {
+    std::cout << "Values: " << std::endl;
+    INSERT_DATA* current = root.get();
+    while(true) {
+        std::cout << "-----------------------\n";
+        for(auto token : current->tokens) {
+            std::cout << token.value << "\n";
         }
-        void print_set(std::vector<Comparison> s) {
-            std::cout << "SET: " << std::endl;
-            for(auto comp : s) {
-                std::cout << comp.attribute.value << " "
-                  << comp.comparator.value << " "
-                  << comp.value.value << std::endl;
-            }
+        if(current->next == nullptr) {
+            break;
         }
-        void print_values(std::vector<Token> v) {
-            std::cout << "Values: " << std::endl;
-            for (auto val : v) {
-                std::cout << val.value << std::endl; 
-            }
-        }
-        void print_overrite(const bool c) { 
-            if(c) {
-                std::cout << "Will overrite table" << std::endl;
-            }
-        }
-        void print_create_cols(const std::vector<Column_AST>& c) {
-            std::cout << "Columns: " << std::endl;
-            std::cout << "-------------------------" << std::endl;
-            for(auto col : c) {
-                std::cout << "Name: " << col.name.value << std::endl;
-                std::cout << "Constraints: " << std::endl;
-                if(col.constraints.unique) std::cout << "UNIQUE" << std::endl;
-                if(col.constraints.auto_incriment) std::cout << "AUTO_INCRIMENT" << std::endl;
-                if(col.constraints.not_null) std::cout << "NOT_NULL" << std::endl;
-                if(col.constraints.indexed) std::cout << "INDEXED" << std::endl;
-                if(col.constraints.primary_key) std::cout << "PRIMARY_KEY" << std::endl;
-                if(col.constraints.foreign_key) std::cout << "FOREIGN_KEY" << std::endl;
-                std::cout << "-------------------------" << std::endl;
-            }
-        }
+        current = current->next.get();
+    }
+    std::cout << "-----------------------\n";
+}
+void print_overrite(const bool c) { 
+    if(c) {
+        std::cout << "Will overrite table" << std::endl;
+    }
+}
+void print_create_cols(const std::vector<Column_AST>& c) {
+    std::cout << "Columns: " << std::endl;
+    std::cout << "-------------------------" << std::endl;
+    for(auto col : c) {
+        std::cout << "Name: " << col.name.value << std::endl;
+        std::cout << "Constraints: " << std::endl;
+        if(col.constraints.unique) std::cout << "UNIQUE" << std::endl;
+        if(col.constraints.auto_incriment) std::cout << "AUTO_INCRIMENT" << std::endl;
+        if(col.constraints.not_null) std::cout << "NOT_NULL" << std::endl;
+        if(col.constraints.indexed) std::cout << "INDEXED" << std::endl;
+        if(col.constraints.primary_key) std::cout << "PRIMARY_KEY" << std::endl;
+        if(col.constraints.foreign_key) std::cout << "FOREIGN_KEY" << std::endl;
+        std::cout << "-------------------------" << std::endl;
+    }
+}
 
 template<typename T>
 void print_AST(const T& ast) {
@@ -778,7 +836,7 @@ void print_AST(const T& ast) {
     if constexpr (std::is_same_v<T, INSERT_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
         print_attributes(ast.attributes);
-        print_values(ast.values);
+        print_values(ast.root);
         return;
     }
     else if constexpr (std::is_same_v<T, SELECT_AST>) {
@@ -821,7 +879,13 @@ int test_interpreter(std::string sql) {
         return 1;
     }
 
-    print_AST(std::get<CREATE_AST>(AST.tree));
+    print_AST(std::get<INSERT_AST>(AST.tree));
     std::cout << "compiles!\n";
     return 0;
 }
+
+/*
+int main() {
+    test_interpreter("INSERT (id, name, grade) INTO dudes VALUES ((1, 'dude', 6.9), (2, 'Johan', 6.7), (3, 'barkdude', 1.8));");
+}
+*/
