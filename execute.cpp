@@ -617,7 +617,14 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                 std::cerr << "Cannot SELECT FROM TABLE while not connected to any DATABASE\n";
                 return false;
             }
+            std::cout << "Its this: \n";
+            auto its = database.id_lookup.find(tree.table.value);
+            if(its == database.id_lookup.end()) {
+                std::cerr << "Table not found\n";
+                return false;
+            }
             uint32_t tableID = database.id_lookup.at(tree.table.value);
+            std::cout << "Never mind\n";
 
             auto it = pager.tableMetadata.find(tableID);
             if(it == pager.tableMetadata.end()) {
@@ -645,10 +652,12 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             if(!scannedResults) {
                 return false;
             }
+            /*
             std::cout << "-------RESULTS---------\n";
             for (auto result: *scannedResults) {
                 printRow(result.row);
             }
+            */
             if (scannedResults){
                 resultSet = std::move(ReturnResultSet(*scannedResults, tree.attributes, database.tables.at(tableID)));
                 std::cout << "SELECT FROM TABLE\n";
@@ -672,7 +681,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
     return true;
 }
 
-int main() {
+int testExe() {
     
     CacheManagement cache;
     ResultSet result;
