@@ -66,9 +66,45 @@ enum class Constraint {
 
 };
 
+enum class LOGICAL {
+
+    AND,
+    OR,
+    NOT
+
+};
+
+struct Expression {
+    virtual ~Expression() = default;
+};
+
+
+struct ComparisonNode : Expression {
+    Token attribute;
+    Token comparator;
+    Token value;
+};
+
+struct OrNode : Expression {
+    const LOGICAL logical = LOGICAL::OR;
+    std::unique_ptr<Expression> left;
+    std::unique_ptr<Expression> right;
+};
+
+struct AndNode : Expression {
+    const LOGICAL logical = LOGICAL::AND;
+    std::unique_ptr<Expression> left;
+    std::unique_ptr<Expression> right;
+};
+
+struct NotNode : Expression {
+    const LOGICAL logical = LOGICAL::NOT;
+    std::unique_ptr<Expression> next;
+};
+
+
 
 struct Clause;
-
 struct Connector {
     ConnType type;
     std::unique_ptr<Clause> next;
@@ -224,7 +260,7 @@ struct SELECT_AST {
 
     Token table;
     std::vector<Token> attributes;
-    std::unique_ptr<Where_clause> where_clauses;
+    std::unique_ptr<Expression> WHERE_ROOT;
 
 };
 

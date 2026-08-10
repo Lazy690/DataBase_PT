@@ -20,7 +20,8 @@ enum class Conditional {
     GREATER,
     LESSER,
     GREATERorEQUAL,
-    LESSERorEQUAL
+    LESSERorEQUAL,
+    NotEQUAL
 };
 
 // Row Declarations
@@ -36,17 +37,17 @@ struct Row {
     std::vector<Entry> values = {};
     
     void add_entry(DataType t, std::variant<int32_t, std::string, double> v) {
-        if      (t == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
-        else if (t == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(v).size());
-        else if (t == DataType::REAL)    sizeOfRow += sizeof(double);
+        if      (t == DataType::INT) sizeOfRow += sizeof(int32_t);
+        else if (t == DataType::STRING)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(v).size());
+        else if (t == DataType::DOUBLE)    sizeOfRow += sizeof(double);
 
         sizeOfRow += sizeof(uint32_t);
         values.push_back({t, v});
     };
     void add_entry(Entry& entry) {
-        if      (entry.type == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
-        else if (entry.type == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
-        else if (entry.type == DataType::REAL)    sizeOfRow += sizeof(double);
+        if      (entry.type == DataType::INT) sizeOfRow += sizeof(int32_t);
+        else if (entry.type == DataType::STRING)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
+        else if (entry.type == DataType::DOUBLE)    sizeOfRow += sizeof(double);
 
         sizeOfRow += sizeof(uint32_t);
         values.push_back(entry);
@@ -63,9 +64,9 @@ struct Row {
     void RecalculateSize() {
         sizeOfRow = 0;
         for (auto& entry : values) {
-            if      (entry.type == DataType::INTEIRO) sizeOfRow += sizeof(int32_t);
-            else if (entry.type == DataType::TEXTO)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
-            else if (entry.type == DataType::REAL)    sizeOfRow += sizeof(double);
+            if      (entry.type == DataType::INT) sizeOfRow += sizeof(int32_t);
+            else if (entry.type == DataType::STRING)   sizeOfRow += sizeof(uint32_t) + static_cast<uint32_t>(std::get<std::string>(entry.value).size());
+            else if (entry.type == DataType::DOUBLE)    sizeOfRow += sizeof(double);
             sizeOfRow += sizeof(uint32_t);
         }
 
@@ -214,55 +215,58 @@ struct QueryParams {
 //Compare Functions
 template<typename T>
 bool compare(T RowValue, Conditional conditional, T value, bool negated = false) {
-    bool result;
 
     switch(conditional) {
         case Conditional::EQUAL:
             if(RowValue == value){
-                result = true;
+                return  true;
             }
             else {
-                result = false;
+                return  false;
             } 
             break;
         case Conditional::GREATER:
             if(RowValue > value){
-                result = true;
+                return  true;
             }
             else {
-                result = false;
+                return  false;
             } 
             break;
         case Conditional::LESSER:
             if(RowValue < value){
-                result = true;
+                return  true;
             }
             else {
-                result = false;
+                return false;
             } 
             break;
         case Conditional::GREATERorEQUAL:
             if(RowValue >= value){
-                result = true;
+                return  true;
             }
             else {
-                result = false;
+                return  false;
             } 
             break;
         case Conditional::LESSERorEQUAL:
             if(RowValue <= value){
-                result = true;
+                return  true;
             }
             else {
-                result = false;
+                return  false;
+            } 
+            break;
+        case Conditional::NotEQUAL:
+            if(RowValue != value){
+                return  true;
+            }
+            else {
+                return  false;
             } 
             break;
     }
-    if(negated) {
-        if (result) result = false;
-        else result = true;
-    }
-    return result;
+    return false;
 };
 
 void printRow(Row& row);
@@ -277,6 +281,7 @@ struct ScanResult {
     Row row;
 };
 bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value);
+bool ScanRowsFromPage(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, uint32_t pageID,Logger& logger, Pager& pager);
 
 bool START(const DataBase& database, FileManager& manager, Logger& logger, LoggerHeader& globalLogHeader, BeforeImageHeader& globalImageHeader);
 

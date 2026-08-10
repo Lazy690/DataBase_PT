@@ -214,13 +214,13 @@ bool load_column(std::fstream& file, Column& column, uint32_t& index) {
 void printColumn(const Column& column) {
     std::cout << "Type: ";
     switch(column.type) {
-        case DataType::INTEIRO:
+        case DataType::INT:
             std::cout << "INT\n";
             break;
-        case DataType::TEXTO:
+        case DataType::STRING:
             std::cout << "TEXT\n";
             break;
-        case DataType::REAL:
+        case DataType::DOUBLE:
             std::cout << "DOUBLE\n";
             break;
     }
@@ -484,6 +484,7 @@ bool delete_table_folder(fs::path dir) {
     */
     if (!fs::exists(dir)) return true;
     fs::remove_all(dir);
+    return true;
 
 }
 

@@ -230,17 +230,17 @@ std::vector<char> serializeRow(Row& row) {
         uint32_t type_u = static_cast<uint32_t>(entry.type);
         bytes.insert(bytes.end(), reinterpret_cast<const char*>(&type_u), reinterpret_cast<const char*>(&type_u) + sizeof(type_u));
           
-        if(entry.type == DataType::INTEIRO) {
+        if(entry.type == DataType::INT) {
             const int32_t integer = std::get<int32_t>(entry.value);
             bytes.insert(bytes.end(), reinterpret_cast<const char*>(&integer), reinterpret_cast<const char*>(&integer) + sizeof(integer));
         }
-        else if(entry.type == DataType::TEXTO) {
+        else if(entry.type == DataType::STRING) {
             const std::string& str = std::get<std::string>(entry.value);
             const uint32_t len = static_cast<uint32_t>(str.size());
             bytes.insert(bytes.end(), reinterpret_cast<const char*>(&len), reinterpret_cast<const char*>(&len) + sizeof(len));
             bytes.insert(bytes.end(), str.begin(), str.end());
         }
-        else if(entry.type == DataType::REAL) {
+        else if(entry.type == DataType::DOUBLE) {
             const double dub = std::get<double>(entry.value);
             bytes.insert(bytes.end(), reinterpret_cast<const char*>(&dub), reinterpret_cast<const char*>(&dub) + sizeof(dub));
         }
@@ -284,19 +284,19 @@ deserializeRow(std::span<const char> rowBytes) {
         entry.type = dtype;
 
         switch (entry.type) {
-            case DataType::INTEIRO: {
+            case DataType::INT: {
                 auto integer = read_bytes<int32_t>(rowBytes, index);
                 if(!integer) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
                 entry.value = *integer;
                 break;
             }
-            case DataType::REAL: {
+            case DataType::DOUBLE: {
                 auto dub = read_bytes<double>(rowBytes, index);
                 if(!dub) { std::cerr << "index went over the buffer size\n"; return std::nullopt; }
                 entry.value = *dub;
                 break;
             }
-            case DataType::TEXTO: {
+            case DataType::STRING: {
                 auto str_len = read_bytes<uint32_t>(rowBytes, index);
                 if(!str_len) { std::cerr << "index went over the buffer size or string len was null\n"; return std::nullopt; }
                 auto str = read_bytes<std::string>(rowBytes, index, str_len);
@@ -333,15 +333,15 @@ void printRow(Row& row) {
     std::cout << "Entries: \n";
     for (auto& entry : row.values) {
         switch (entry.type) {
-            case DataType::INTEIRO:
+            case DataType::INT:
                 std::cout << "Data Type: INTEIRO" << "\n";
                 std::cout << "Value: " << std::get<int32_t>(entry.value) << "\n";
                 break;
-            case DataType::REAL:
+            case DataType::DOUBLE:
                 std::cout << "Data Type: REAL" << "\n";
                 std::cout << "Value: " << std::get<double>(entry.value) << "\n";
                 break;
-            case DataType::TEXTO:
+            case DataType::STRING:
                 std::cout << "Data Type: TEXTO" << "\n";
                 std::cout << "Value: " << std::get<std::string>(entry.value) << "\n";
                 break;
@@ -374,14 +374,14 @@ bool loadRow(std::ifstream& file, Row& row, std::vector<DataType> types) {
         int32_t integer = 0;
         double  dub     = 0;
         switch(types[i]) {
-            case DataType::INTEIRO:
+            case DataType::INT:
                 integer = std::stoll(words[i]);
                 entry.value = integer;
                 break;
-            case DataType::TEXTO:
+            case DataType::STRING:
                 entry.value = words[i];
                 break;
-            case DataType::REAL:
+            case DataType::DOUBLE:
                 dub = std::stod(words[i]);
                 entry.value = dub;
                 break;
@@ -404,13 +404,13 @@ bool saveRow(std::ofstream& file, const Row& row, const std::vector<DataType>& t
         Entry entry = row.values[i];  
         
         switch(types[i]) {
-            case DataType::INTEIRO:
+            case DataType::INT:
                 ss << std::get<int32_t>(entry.value);
                 break;
-            case DataType::TEXTO:
+            case DataType::STRING:
                 ss << std::get<std::string>(entry.value);
                 break;
-            case DataType::REAL:
+            case DataType::DOUBLE:
                 ss << std::get<double>(entry.value);
                 break;
         }
@@ -579,6 +579,7 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger =
 
         pager.pages.insert({ID, *loadedPage});
 
+        /*
         if(logger != nullptr) {
             if(!logger->flushed_beforeImages.contains(ID)) {
                 BeforeImage before;
@@ -591,6 +592,7 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger =
                 logger->flushed_beforeImages.insert(ID);
             }
         }
+        */
     }
     //else std::cout << "Cache hit on page: " << ID.pageID << "\n";
     page = &pager.pages.at(ID);
@@ -1194,12 +1196,10 @@ bool REDO(const DataBase& database, FileManager& manager, uint32_t NumLogs, cons
             std::cerr << "Table not found when REDO ing\n";
             return false;
         }
-        std::cout << "Its this: \n";
         if(!loadTableFile(manager, it->second)){
             std::cerr << "Failed to load Table file when REDO ing\n";
             return false;
         }
-        std::cout << "Never mind\n";
 
         if(!flush_page(manager.files.at(key.tableID), page)) {
             std::cerr << "failed to flush page: " << page.header.id << "\n";
@@ -1361,22 +1361,35 @@ bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
         Row row = *rowPtr;
 
         if(row.tumpstoned) {
-              int tumpstoneByteSize = sizeof(row.tumpstoned);
-              int sizeOfRowByteSize = sizeof(row.sizeOfRow);
-              int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
-              cursor += totalSkipSize;
-              continue;
-          }
+            int tumpstoneByteSize = sizeof(row.tumpstoned);
+            int sizeOfRowByteSize = sizeof(row.sizeOfRow);
+            int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
+            cursor += totalSkipSize;
+            continue;
+        }
 
-          size_t rowOffset  = std::distance(page.buffer.begin(), cursor);
-          size_t ID         = page.header.id;
+        size_t rowOffset  = std::distance(page.buffer.begin(), cursor);
+        size_t ID         = page.header.id;
 
-          results.push_back({ID, rowOffset, row});
+        results.push_back({ID, rowOffset, row});
 
-          int tumpstoneByteSize = sizeof(row.tumpstoned);
-          int sizeOfRowByteSize = sizeof(row.sizeOfRow);
-          int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
-          cursor += totalSkipSize;
+        int tumpstoneByteSize = sizeof(row.tumpstoned);
+        int sizeOfRowByteSize = sizeof(row.sizeOfRow);
+        int totalSkipSize = tumpstoneByteSize + sizeOfRowByteSize + row.sizeOfRow;
+        cursor += totalSkipSize;
+    }
+    return true;
+}
+
+bool ScanRowsFromPage(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, uint32_t pageID,Logger& logger, Pager& pager) {
+    assert(file.is_open());
+    Page* page = requestPage(file, pager, {tableID, pageID}, &logger);
+    if(!page) {
+        std::cerr << "Page not found\n";
+        return false;
+    }
+    if(!ScanAllRows(results, *page)) {
+        return false;
     }
     return true;
 }
@@ -1443,8 +1456,7 @@ ScanTable(std::fstream& file, uint32_t tableID, Logger& logger, Pager& pager, Qu
     
     std::vector<ScanResult> results;
 
-    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) {
-        std::cout << "Table has no pages\n";
+    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) { std::cout << "Table has no pages\n";
         return results;
     } 
 
@@ -1472,14 +1484,20 @@ ScanTable(std::fstream& file, uint32_t tableID, Logger& logger, Pager& pager, Qu
 
 }
 
-bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value) {
 
+
+bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t column_index, const std::variant<int32_t, std::string, double> value) {
+    assert(file.is_open());
     if(pager.tableMetadata[tableID].PAGECOUNT <= 0) {
         return true;
     } 
     for (uint32_t id = 0; id < pager.tableMetadata[tableID].PAGECOUNT; id++) {
         
         Page* page = requestPage(file, pager, {tableID, id});
+        if(!page) {
+            std::cerr << "Failed to load page\n";
+            return false;
+        }
 
         std::vector<ScanResult> result;       
         QueryParams params = {column_index, Conditional::EQUAL, value};

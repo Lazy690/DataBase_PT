@@ -18,9 +18,11 @@ struct MetaDataHeader {
 
 
 enum class DataType : uint32_t {
-    INTEIRO = 1, //int
-    TEXTO = 2, //string
-    REAL = 3 //double
+    INT      = 1,
+    STRING   = 2,
+    DOUBLE   = 3,
+    BOOLEAN  = 4,
+    NULLTYPE = 5
 };
 
 struct Constraints_list {

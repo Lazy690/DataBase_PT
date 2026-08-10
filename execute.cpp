@@ -2,6 +2,7 @@
 #include <cassert>
 #include <string>
 #include <vector>
+#include <optional>
 #include "interpreter.hpp"
 #include "src/filesys.hpp"
 #include "src/storage.hpp"
@@ -22,9 +23,11 @@ struct CacheManagement {
 
 };
 
+/*
 bool (*IntComparison)(int32_t, Conditional, int32_t, bool) = compare;
 bool (*StrComparison)(std::string, Conditional, std::string, bool) = compare;
 bool (*DubComparison)(double, Conditional, double, bool)  = compare;
+*/
 
 template<typename T>
 struct QueryFilter {
@@ -35,6 +38,137 @@ struct QueryFilter {
     bool is_negated = false;
 
 };
+
+using column_name  = std::string;
+using column_index = uint32_t;
+bool EVALUATE_COMPARISON(ComparisonNode comparison, std::unordered_map<column_name, column_index>& columns, Row& row) {
+    
+    auto it = columns.find(comparison.attribute.value);
+    assert(it != columns.end());
+    uint32_t index = it->second;
+    Conditional condition;
+    if (comparison.comparator.value == "=") {
+        condition = Conditional::EQUAL;
+    }
+    if (comparison.comparator.value == ">") {
+        condition = Conditional::GREATER;
+    }
+    if (comparison.comparator.value == "<") {
+        condition = Conditional::LESSER;
+    }
+    if (comparison.comparator.value == ">=") {
+        condition = Conditional::GREATERorEQUAL;
+    }
+    if (comparison.comparator.value == "<=") {
+        condition = Conditional::LESSERorEQUAL;
+    }
+    if (comparison.comparator.value == "!=") {
+        condition = Conditional::NotEQUAL;
+    }
+    Entry* entry_to_compare = &row.values[index];
+    switch(entry_to_compare->type) {
+        case DataType::INT:
+            return compare(std::get<int32_t>(entry_to_compare->value), condition, static_cast<int32_t>(std::stoi(comparison.value.value)));
+            break;
+        case DataType::STRING:
+            std::cout << "Val from row: " << std::get<std::string>(entry_to_compare->value);
+            std::cout << " " << comparison.comparator.value;
+            std::cout << " Val from imput: " << comparison.value.value << "\n";
+            {
+            bool result = compare(std::get<std::string>(entry_to_compare->value), condition, comparison.value.value);
+            return result;
+            }
+            break;
+        case DataType::DOUBLE:
+            std::cout << "Val from row: " << std::get<double>(entry_to_compare->value);
+            std::cout << " " << comparison.comparator.value;
+            std::cout << " Val from imput: " << comparison.value.value << "\n";
+            {
+            bool result = compare(std::get<double>(entry_to_compare->value), condition, std::stod(comparison.value.value));
+            return result;
+            }
+            break;
+    }
+    return false;
+}
+
+bool EVALUATE(Expression* node, std::unordered_map<column_name, column_index>& columns, Row& row) {
+    if (auto* comparison = dynamic_cast<ComparisonNode*>(node)) {
+        return EVALUATE_COMPARISON(*comparison, columns, row);
+    }
+    if (auto* andNode = dynamic_cast<AndNode*>(node)) {
+        return EVALUATE(andNode->left.get(), columns, row) &&
+               EVALUATE(andNode->right.get(), columns, row);
+    }
+    if (auto* orNode = dynamic_cast<OrNode*>(node)) {
+        return EVALUATE(orNode->left.get(), columns, row) ||
+               EVALUATE(orNode->right.get(), columns, row);
+    }
+    if (auto* notNode = dynamic_cast<NotNode*>(node)) {
+        return EVALUATE(notNode->next.get(), columns, row);
+    }
+    throw std::runtime_error("Unknown expression node");
+}
+
+/*
+bool VerifyExpressionIntegrety(Expression* node, std::unordered_map<column_name, column_index>& columns, Row& row, bool is_correct = false) {
+    if (auto* comparison = dynamic_cast<ComparisonNode*>(node)) {
+        auto it = columns.find(comparison.attribute.value);
+        if(it == columns.end()) {
+           std::cerr << "Column does not exist: " << comparison.attribute.value << "\n";
+           is_correct = false;
+           return false;
+        }
+        if(row.values[it.second()].type == DataType::STRING &&
+           comparison.value.type != TokenType::STRING) {
+           std::cerr << "Value: " << comparison.value.value << " is of datatype string and cannot be converted into a number"<< "\n";
+           is_correct = false; 
+           return false;
+        }
+        is_correct = true;
+        return true;
+    }
+    if (auto* andNode = dynamic_cast<AndNode*>(node)) {
+        return EVALUATE(andNode->left.get(), columns, row) &&
+               EVALUATE(andNode->right.get(), columns, row);
+    }
+    if (auto* orNode = dynamic_cast<OrNode*>(node)) {
+        return EVALUATE(orNode->left.get(), columns, row) &&
+               EVALUATE(orNode->right.get(), columns, row);
+    }
+    if (auto* notNode = dynamic_cast<NotNode*>(node)) {
+        return EVALUATE(notNode->next.get(), columns, row);
+    }
+    throw std::runtime_error("Unknown expression node");
+
+}
+*/
+
+std::optional<std::vector<ScanResult>> SCAN(std::fstream& file, Table& table, uint32_t tableID, Logger& logger, Pager& pager, Expression* expr = nullptr) {
+    assert(file.is_open());
+    std::vector<ScanResult> results;
+    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) { 
+        std::cout << "Table has no pages\n";
+        return std::nullopt;
+    } 
+    for (uint32_t pageID = 0; pageID < pager.tableMetadata[tableID].PAGECOUNT; pageID++) {
+        std::vector<ScanResult> ScannedRows;
+        if(!ScanRowsFromPage(file, ScannedRows, tableID, pageID, logger, pager)) {
+            std::cerr << "Failed to load rows from page\n";
+            return std::nullopt;
+        }
+        for(auto& result : ScannedRows) {
+            if(expr == nullptr) {
+                results.push_back(result);
+                continue;
+            }
+            if(EVALUATE(expr, table.id_lookup, result.row)) {
+                results.push_back(result);
+            }
+        }
+    }
+    return results;
+}
 
 std::vector<Column> ConvertToColumns(const std::vector<Column_AST>& col_asts) {
     std::vector<Column> results;
@@ -55,15 +189,15 @@ Row ConvertToRow(const std::vector<Token>& tokens) {
         Entry entry;
         switch(tokens[i].type) {
             case TokenType::INT:
-                entry.type  = DataType::INTEIRO;
+                entry.type  = DataType::INT;
                 entry.value = static_cast<int32_t>(std::stoi(tokens[i].value));
                 break;
             case TokenType::STRING:
-                entry.type  = DataType::TEXTO;
+                entry.type  = DataType::STRING;
                 entry.value = tokens[i].value;
                 break;
             case TokenType::DOUBLE:
-                entry.type  = DataType::REAL;
+                entry.type  = DataType::DOUBLE;
                 entry.value = std::stod(tokens[i].value);
                 break;
         }
@@ -120,19 +254,34 @@ bool VerifyTypeIntegrety(const Token& attribute, const Token& value, const Table
     uint32_t ColumnID = table.id_lookup.at(attribute.value);
     Column column = table.schema.at(ColumnID);
 
-    if(column.type == DataType::INTEIRO) {
+    /*
+    if(column.type == DataType::INT) {
         if(value.type != TokenType::INT) {
             throw std::runtime_error("Entry is not an INT\n");
             return false;
         }
     }
-    else if(column.type == DataType::REAL) {
-        if(value.type != TokenType::DOUBLE) {
-            throw std::runtime_error("Entry is not a DOUBLE\n");
+    */
+    if(column.type == DataType::DOUBLE || column.type == DataType::INT) {
+        if(value.type != TokenType::DOUBLE && value.type != TokenType::INT) {
+            std::cout << "value: " << value.value << "\n";
+            std::cout << "value type: ";
+            switch(value.type) {
+                case TokenType::STRING:
+                    std::cout << "STRING\n";
+                    break;
+                case TokenType::INT:
+                    std::cout << "INT\n";
+                    break;
+                case TokenType::DOUBLE:
+                    std::cout << "DOUBLE\n";
+                    break;
+            }
+            throw std::runtime_error("Entry is not a NUMBER\n");
             return false;
         }
     }
-    else if(column.type == DataType::TEXTO) {
+    else if(column.type == DataType::STRING) {
         if(value.type != TokenType::STRING) {
             throw std::runtime_error("Entry is not of DataType TEXT\n");
             return false;
@@ -255,13 +404,13 @@ struct ResultSet {
     std::vector<Result> values;
 };
 
-ResultSet ReturnResultSet(const std::vector<Row>& rows, const std::vector<Token>& attributes, const Table& table) {
+ResultSet ReturnResultSet(const std::vector<ScanResult>& rows, const std::vector<Token>& attributes, const Table& table) {
     //Assumes columns are sorted and verified
     ResultSet set;
     if(attributes[0].value == "*") {
         for(auto& row : rows) {
             Result result;
-            for(auto& entry : row.values) {
+            for(auto& entry : row.row.values) {
                 result.values.push_back(entry.value);
             }
             set.values.push_back(result);
@@ -273,7 +422,7 @@ ResultSet ReturnResultSet(const std::vector<Row>& rows, const std::vector<Token>
             Result result;
             for (auto& attribute : attributes) {
                 uint32_t column_index = table.id_lookup.at(attribute.value);
-                result.values.push_back(row.values[column_index].value);
+                result.values.push_back(row.row.values[column_index].value);
             }
             set.values.push_back(result);
         }
@@ -491,13 +640,17 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             }
             else assert(tree.attributes.size() == 1);
 
-            std::vector<Row> queryResult;
-            //std::cout << "Loaded metadata pagecount: " << pager.tableMetadata[tableID].PAGECOUNT << "\n";
-            if(!SELECT(manager.files.at(tableID), queryResult, tableID, logger, pager)) {
+            Expression* expr = tree.WHERE_ROOT.get();
+            auto scannedResults = SCAN(manager.files.at(tableID), database.tables.at(tableID), tableID, logger, pager, expr);
+            if(!scannedResults) {
                 return false;
             }
-            else {
-                resultSet = std::move(ReturnResultSet(queryResult, tree.attributes, database.tables.at(tableID)));
+            std::cout << "-------RESULTS---------\n";
+            for (auto result: *scannedResults) {
+                printRow(result.row);
+            }
+            if (scannedResults){
+                resultSet = std::move(ReturnResultSet(*scannedResults, tree.attributes, database.tables.at(tableID)));
                 std::cout << "SELECT FROM TABLE\n";
             }
 
@@ -532,30 +685,40 @@ int main() {
         return 1;
     }
 
-    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT UNIQUE INDEXED NOT_NULL, grade DOUBLE);", result)) {
+    if(!EXECUTE(cache, "CREATE TABLE cool_dudes IF NOT EXISTS (id INT UNIQUE PRIMARY_KEY AUTO_INCRIMENT, name TEXT INDEXED NOT_NULL, grade DOUBLE);", result)) {
         return 1;
     }
     if(!START(cache.database, cache.manager, cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
+    /*
+    if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Alice', 95.0), ('Bob', 78.0), ('Charlie', 92.0), ('Diana', 85.0), ('Eve', 88.0), ('Frank', 72.0), ('Grace', 91.0), ('Henry', 76.0), ('Iris', 89.0), ('Jack', 84.0));", result)) {
+        return 1;
+    }
+    */
+    /*
     if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Markiemoo', 6.9), ('Cameleon', 6.7), ('Larry', 1.8));", result)) {
         return 1;
     }
+    */
     //std::cout << "Crashing now\n";
     //return 0;
-    if(!EXECUTE(cache, "SELECT * FROM cool_dudes;", result)) {
+    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE grade >= 85 AND grade <= 90 AND name != 'Eve';", result)) {
         return 1;
     }
 
+    assert(result.values.size() > 0);
+    /*
     for(auto& result : result.values) {
         
-        int id = result.get<int>(0);
+        int32_t id = result.get<int32_t>(0);
         std::string name = result.get<std::string>(1);
-        double grade = result.get<double>(2);
+        double grade = result.get<int32_t>(2);
         std::cout << "------------------\n";
-        std::cout << " id: " << id << "\n name: " << name << "\n grade: " << grade << "\n";
+        std::cout << "name: " << name << "\n grade: " << grade << "\n";
     }
     std::cout << "------------------\n";
+    */
     if(!COMMIT(cache.database, cache.manager, cache.logger, cache.pager, globalTBHEADER, globalDBHEADER, globalRBHEADER)) {
         return 1;
     }

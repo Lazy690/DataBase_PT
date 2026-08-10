@@ -28,9 +28,9 @@ const std::unordered_map<std::string, Action> ACTION_MAP = {
 };
 
 const std::unordered_map<std::string, DataType> DATATYPE_MAP = {
-    {"INT",    DataType::INTEIRO}, 
-    {"TEXT",   DataType::TEXTO}, 
-    {"DOUBLE", DataType::REAL}
+    {"INT",    DataType::INT}, 
+    {"TEXT",   DataType::STRING}, 
+    {"DOUBLE", DataType::DOUBLE}
 };
 
 std::unordered_set<std::string> KeyWords {
@@ -64,6 +64,7 @@ std::unordered_set<std::string> KeyWords {
       "<=",
       ">",
       "<",
+      "!=",
       ";"
 
 };
@@ -73,7 +74,8 @@ std::unordered_set<std::string> Comparators {
       ">=",
       "<=",
       ">",
-      "<"
+      "<",
+      "!="
  
 };
 std::unordered_set<std::string> constraints_set {
@@ -262,73 +264,6 @@ struct Cursor  {
     }
 };
 
-/*
-enum class ConnType {
-
-    AND,
-    OR,
-    NOT
-
-};
-
-struct Clause {
-    virtual ~Expression() = default;
-};
-
-struct Comparison : Clause {
-    Token attribute;
-    Token comparator;
-    Token value;
-};
-
-struct Logical : Clause {
-
-    ConnType op;
-
-    std::unique_ptr<Clause> left;
-    std::unique_ptr<Clause> right;
-
-};
-
-struct Not : Clause {
-    std::unique_ptr<Clause> clause;
-};
-
-Comparison handle_comparison(Cursor& cursor) {
-    Comparison comp;
-    if(isKeyWord(cursor.peek())) throw("Expected Attribute name in Comparoson");
-    comp.attribute = cursor.consume();
-    if(!isKeyComparator(cursor.peek())) throw("Expected comparison Token after Attribute decleration");
-    comp.comparator = cursor.comsume();
-    if(isKeyWord(cursor.peek())) throw("Expected Value after comparison Token");
-    comp.value = cursor.consume();
-    return comp;
-}
-
-std::unique_ptr<Clause> Handle_Clauses(std::span<Token> tokens) {
-    Cursor cursor;
-    cursor.tokens.assign(tokens.begin(), tokens.end());
-    if(isKeyWord(cursor.Tokens[0])) throw("Expected Comparison expression after 'WHERE' Token");
-    if(cursor.Tokens[0].value == ")") throw("Expected Comparison expression after 'WHERE' Token");
-
-    while(cursor.index != cursor.tokens.size()) {
-        auto root = std::unique_ptr<Comparison>(handle_comparison(cursor));
-
-    }
-}
-*/
-
-
-
-
-
-
-
-
-
-
-
-
 bool isKeyWord(const std::string& word) {
     return KeyWords.contains(word);
 }
@@ -338,6 +273,73 @@ bool isKeyComparator(const std::string& word) {
 bool isKeyConstraint(const std::string& word) {
     return constraints_set.contains(word);
 }
+
+std::unique_ptr<ComparisonNode> ParseComparison(Cursor& cursor) {
+    auto comp = std::make_unique<ComparisonNode>();
+    if(isKeyWord(cursor.peek())) throw("Expected Attribute name in Comparoson");
+    comp->attribute = cursor.consume();
+    std::cout << "attribute: " << comp->attribute.value << "\n";
+    if(!isKeyComparator(cursor.peek())) throw("Expected comparison Token after Attribute decleration");
+    comp->comparator = cursor.consume();
+    std::cout << "comparator: " << comp->comparator.value << "\n";
+    if(isKeyWord(cursor.peek())) throw("Expected Value after comparison Token");
+    comp->value = cursor.consume();
+    std::cout << "value: " << comp->value.value << "\n";
+    return comp;
+}
+std::unique_ptr<Expression> ParsePrimary(Cursor& cursor);
+
+std::unique_ptr<Expression> ParseAnd(Cursor& cursor) {
+    std::cout << "Parsing AND\n";
+    auto left = ParsePrimary(cursor);
+    while (cursor.match("AND")) {
+        auto node = std::make_unique<AndNode>();
+        node->left = std::move(left);
+        node->right = ParsePrimary(cursor);
+        left = std::move(node);
+    }
+    return left;
+}
+//A OR B
+std::unique_ptr<Expression> ParseOr(Cursor& cursor) {
+    std::cout << "Parsing OR\n";
+    auto left = ParseAnd(cursor);
+    while (cursor.match("OR")) {
+        std::cout << "Matched OR\n";
+        auto node = std::make_unique<OrNode>();
+        node->left  = std::move(left);
+        node->right = ParseAnd(cursor);
+
+        left = std::move(node);
+    }
+    return left;
+}
+std::unique_ptr<Expression> ParsePrimary(Cursor& cursor) {
+    std::cout << "Parsing Primary\n";
+    if(cursor.match("(")) {
+        auto expression  = ParseOr(cursor);
+        if(!cursor.match(")")) throw ("Parenthesis was not closed in WHERE clause decleration");
+        return expression;
+    }
+    auto comp = ParseComparison(cursor);
+    return comp;
+}
+
+
+std::unique_ptr<Expression> Handle_Expression(Cursor& cursor) {
+    return ParseOr(cursor);
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 Comparison return_comparison(Cursor& cursor) {
@@ -503,7 +505,7 @@ std::vector<Column_AST> handle_column_ast(Cursor& cursor) {
 
                 else if(cursor.peek() == "AUTO_INCRIMENT") {
                     if(has_autoIncriment) throw ("Only one column may be auto incremented");
-                    if(col.type != DataType::INTEIRO) throw ("Non INT types cannot be assigned 'AUTO_INCIMENT' token.");
+                    if(col.type != DataType::INT) throw ("Non INT types cannot be assigned 'AUTO_INCIMENT' token.");
 
                     list.auto_incriment = true;
                     track_constraints.insert(cursor.peek());
@@ -512,7 +514,7 @@ std::vector<Column_AST> handle_column_ast(Cursor& cursor) {
                     continue;
                 }
                 else if(cursor.peek() == "PRIMARY_KEY") {
-                    if(col.type != DataType::INTEIRO) throw ("Non INT types cannot be assigned 'PRIMARY_KEY' token.");
+                    //if(col.type != DataType::INT) throw ("Non INT types cannot be assigned 'PRIMARY_KEY' token.");
                     if(list.foreign_key != false) throw ("Column cannot be 'PRIMARY_KEY' and 'FOREIGN_KEY' at the same time");
 
                     list.primary_key = true;
@@ -521,7 +523,7 @@ std::vector<Column_AST> handle_column_ast(Cursor& cursor) {
                     continue;
                 }
                 else if(cursor.peek() == "FOREIGN_KEY") {
-                    if(col.type != DataType::INTEIRO) throw ("Non INT types cannot be assigned 'FOREIGN_KEY' token.");
+                    //if(col.type != DataType::INT) throw ("Non INT types cannot be assigned 'FOREIGN_KEY' token.");
                     if(list.primary_key != false) throw ("Column cannot be 'PRIMARY_KEY' and 'FOREIGN_KEY' at the same time");
 
                     list.primary_key = true;
@@ -709,8 +711,8 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             select.table = cursor.consume();
             
             if ( cursor.match("WHERE") ) {
-                select.where_clauses = handle_where_clauses(cursor);
-            }                    
+                select.WHERE_ROOT = Handle_Expression(cursor);
+            }
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
 
             AST.tree = std::move(select);
@@ -809,6 +811,30 @@ void print_create_cols(const std::vector<Column_AST>& c) {
         std::cout << "-------------------------" << std::endl;
     }
 }
+void print_expression(Expression* node) {
+    if (auto* comparison = dynamic_cast<ComparisonNode*>(node)) {
+        std::cout << comparison->attribute.value << " " << comparison->comparator.value << " " << comparison->value.value << "\n";
+        return;
+    }
+    if (auto* andNode = dynamic_cast<AndNode*>(node)) {
+        print_expression(andNode->left.get());
+        std::cout << "AND\n";
+        print_expression(andNode->right.get());
+        return;
+    }
+    if (auto* orNode = dynamic_cast<OrNode*>(node)) {
+        print_expression(orNode->left.get());
+        std::cout << "OR\n";
+        print_expression(orNode->right.get());
+        return;
+    }
+    if (auto* notNode = dynamic_cast<NotNode*>(node)) {
+        std::cout << "NOT\n";
+        print_expression(notNode->next.get());
+        return;
+    }
+    throw std::runtime_error("Unknown expression node");
+}
 
 template<typename T>
 void print_AST(const T& ast) {
@@ -842,17 +868,21 @@ void print_AST(const T& ast) {
     else if constexpr (std::is_same_v<T, SELECT_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
         print_attributes(ast.attributes);
+        Expression* ptr = ast.WHERE_ROOT.get();
+        print_expression(ptr);
     }
     else if constexpr (std::is_same_v<T, UPDATE_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
         print_set(ast.set);
     }
+    /*
     if constexpr (std::is_same_v<T, UPDATE_AST> || std::is_same_v<T, SELECT_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
         if(ast.where_clauses == nullptr) return;
         std::cout << "WHERE clauses: " << std::endl;
         ast.where_clauses->print_clause();         
     }
+    */
 }
 
 bool GENERATE_AST(AbstractSyntaxTree& AST, std::string sql) {
@@ -879,13 +909,13 @@ int test_interpreter(std::string sql) {
         return 1;
     }
 
-    print_AST(std::get<INSERT_AST>(AST.tree));
+    print_AST(std::get<SELECT_AST>(AST.tree));
     std::cout << "compiles!\n";
     return 0;
 }
 
 /*
 int main() {
-    test_interpreter("INSERT (id, name, grade) INTO dudes VALUES ((1, 'dude', 6.9), (2, 'Johan', 6.7), (3, 'barkdude', 1.8));");
+    test_interpreter("SELECT * FROM dudes WHERE name = 'kirche' AND age > 18 OR name = 'E;R' AND age < 20 AND ();");
 }
 */
