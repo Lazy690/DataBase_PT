@@ -267,7 +267,7 @@ struct SELECT_AST {
 struct DELETE_AST {
 
     Token table;
-    std::unique_ptr<Where_clause> where_clauses;
+    std::unique_ptr<Expression> WHERE_ROOT;
     
 };
 
@@ -275,7 +275,7 @@ struct UPDATE_AST {
 
     Token table;
     std::vector<Comparison> set;
-    std::unique_ptr<Where_clause> where_clauses;
+    std::unique_ptr<Expression> WHERE_ROOT;
 
 };
 

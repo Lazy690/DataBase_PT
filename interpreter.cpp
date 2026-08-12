@@ -75,7 +75,6 @@ std::unordered_set<std::string> Comparators {
       "<=",
       ">",
       "<",
-      "!="
  
 };
 std::unordered_set<std::string> constraints_set {
@@ -731,8 +730,8 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             delete_.table = cursor.consume();
             
             if ( cursor.match("WHERE") ) {
-                delete_.where_clauses = handle_where_clauses(cursor);
-            }                    
+                delete_.WHERE_ROOT = Handle_Expression(cursor);
+            }
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
 
             AST.tree = std::move(delete_);
@@ -750,8 +749,11 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             cursor.expect("SET");
 
             update.set = handle_set(cursor);
+            if(update.set.size() == 0) throw std::runtime_error("Expected tokens after 'SET'. UPDATE commands requires you to SET values");
 
-            update.where_clauses = handle_where_clauses(cursor);
+            if ( cursor.match("WHERE") ) {
+                update.WHERE_ROOT = Handle_Expression(cursor);
+            }
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
             
             AST.tree = std::move(update);
@@ -874,15 +876,15 @@ void print_AST(const T& ast) {
     else if constexpr (std::is_same_v<T, UPDATE_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
         print_set(ast.set);
+        Expression* ptr = ast.WHERE_ROOT.get();
+        print_expression(ptr);
     }
-    /*
-    if constexpr (std::is_same_v<T, UPDATE_AST> || std::is_same_v<T, SELECT_AST>) {
+    if constexpr (std::is_same_v<T, DELETE_AST>) {
         std::cout << "Table: " << ast.table.value << std::endl;
-        if(ast.where_clauses == nullptr) return;
-        std::cout << "WHERE clauses: " << std::endl;
-        ast.where_clauses->print_clause();         
+        Expression* ptr = ast.WHERE_ROOT.get();
+        print_expression(ptr);
     }
-    */
+    return; 
 }
 
 bool GENERATE_AST(AbstractSyntaxTree& AST, std::string sql) {
@@ -909,13 +911,13 @@ int test_interpreter(std::string sql) {
         return 1;
     }
 
-    print_AST(std::get<SELECT_AST>(AST.tree));
+    print_AST(std::get<DELETE_AST>(AST.tree));
     std::cout << "compiles!\n";
     return 0;
 }
 
 /*
 int main() {
-    test_interpreter("SELECT * FROM dudes WHERE name = 'kirche' AND age > 18 OR name = 'E;R' AND age < 20 AND ();");
+    test_interpreter("DELETE FROM dudes WHERE name = 'kirche' AND age > 18 OR name = 'E;R' AND age < 20;");
 }
 */

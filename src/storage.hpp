@@ -288,4 +288,4 @@ bool START(const DataBase& database, FileManager& manager, Logger& logger, Logge
 bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pager,
             TB_Header& globalTBHEADER, DB_Header& globalDBHEADER, RecordHeader& globalRBHEADER);
 bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, Row& row);
-bool SELECT(std::fstream& file, std::vector<Row>& resultSet, uint32_t tableID, Logger& logger, Pager& pager, QueryParams* params = nullptr);
+bool DELETE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, Logger& logger);

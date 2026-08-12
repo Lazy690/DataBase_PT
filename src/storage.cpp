@@ -1788,14 +1788,8 @@ bool SELECT(std::fstream& file, std::vector<Row>& resultSet, uint32_t tableID, L
     return true;
 }
 
-bool DELETE(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, QueryParams* params) {
+bool DELETE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, Logger& logger) {
 
-    auto resultsPtr = ScanTable(file, tableID, logger, pager, params);
-    if(!resultsPtr) {
-        return false;
-    }
-
-    std::vector<ScanResult> results = *resultsPtr;
     for (auto& result : results) {
         uint32_t ID = result.pageId;
         Page* page = requestPage(file, pager, {tableID, ID}, &logger);

@@ -630,7 +630,6 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                 std::cerr << "Cannot SELECT FROM TABLE while not connected to any DATABASE\n";
                 return false;
             }
-            std::cout << "Its this: \n";
             auto its = database.id_lookup.find(tree.table.value);
             if(its == database.id_lookup.end()) {
                 std::cerr << "Table not found\n";
@@ -681,6 +680,38 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
         case Action::DELETE: 
         {
             
+            DELETE_AST tree = std::move(std::get<DELETE_AST>(AST.tree));
+            if(!database.connected) {
+                std::cerr << "Cannot SELECT FROM TABLE while not connected to any DATABASE\n";
+                return false;
+            }
+            auto its = database.id_lookup.find(tree.table.value);
+            if(its == database.id_lookup.end()) {
+                std::cerr << "Table not found\n";
+                return false;
+            }
+            uint32_t tableID = database.id_lookup.at(tree.table.value);
+
+            auto it = pager.tableMetadata.find(tableID);
+            if(it == pager.tableMetadata.end()) {
+                if(!loadTableFile(manager, database.tables.at(tableID))) {
+                    return false;
+                }
+                if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
+                    return false;
+                }
+            }
+            Expression* expr = tree.WHERE_ROOT.get();
+            auto scannedResults = SCAN(manager.files.at(tableID), database.tables.at(tableID), tableID, logger, pager, expr);
+            if(!scannedResults) {
+                return false;
+            }
+            if(!DELETE(manager.files.at(tableID), *scannedResults, tableID, pager, logger)) {
+                return false;
+            }
+            else {
+                std::cout << "DELETE FROM TABLE\n";
+            }
             break;
         }
         case Action::UPDATE: 
@@ -713,21 +744,24 @@ int main() {
     if(!START(cache.database, cache.manager, cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
+    /*
     if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Alice', 95.0), ('Bob', 78.0), ('Charlie', 92.0), ('Diana', 85.0), ('Eve', 88.0), ('Frank', 72.0), ('Grace', 91.0), ('Henry', 76.0), ('Iris', 89.0), ('Jack', 84.0));", result)) {
         return 1;
     }
-    /*
-    if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Markiemoo', 6.9), ('Cameleon', 6.7), ('Larry', 1.8));", result)) {
+    */
+    if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES ('Kirche', 69.0);", result)) {
         return 1;
     }
-    */
     //std::cout << "Crashing now\n";
     //return 0;
-    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE grade >= 85 AND grade <= '90' AND name != 'Eve';", result)) {
+    if(!EXECUTE(cache, "DELETE FROM cool_dudes WHERE name = 'Kirche';", result)) {
+        return 1;
+    }
+    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE name = 'Kirche';", result)) {
         return 1;
     }
 
-    assert(result.values.size() > 0);
+    assert(result.values.size() == 0);
     /*
     for(auto& result : result.values) {
         
