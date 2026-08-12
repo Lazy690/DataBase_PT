@@ -112,40 +112,6 @@ bool EVALUATE(Expression* node, const Table& table, Row& row) {
     throw std::runtime_error("Unknown expression node");
 }
 
-/*
-bool VerifyExpressionIntegrety(Expression* node, std::unordered_map<column_name, column_index>& columns, Row& row, bool is_correct = false) {
-    if (auto* comparison = dynamic_cast<ComparisonNode*>(node)) {
-        auto it = columns.find(comparison.attribute.value);
-        if(it == columns.end()) {
-           std::cerr << "Column does not exist: " << comparison.attribute.value << "\n";
-           is_correct = false;
-           return false;
-        }
-        if(row.values[it.second()].type == DataType::STRING &&
-           comparison.value.type != TokenType::STRING) {
-           std::cerr << "Value: " << comparison.value.value << " is of datatype string and cannot be converted into a number"<< "\n";
-           is_correct = false; 
-           return false;
-        }
-        is_correct = true;
-        return true;
-    }
-    if (auto* andNode = dynamic_cast<AndNode*>(node)) {
-        return EVALUATE(andNode->left.get(), columns, row) &&
-               EVALUATE(andNode->right.get(), columns, row);
-    }
-    if (auto* orNode = dynamic_cast<OrNode*>(node)) {
-        return EVALUATE(orNode->left.get(), columns, row) &&
-               EVALUATE(orNode->right.get(), columns, row);
-    }
-    if (auto* notNode = dynamic_cast<NotNode*>(node)) {
-        return EVALUATE(notNode->next.get(), columns, row);
-    }
-    throw std::runtime_error("Unknown expression node");
-
-}
-*/
-
 std::optional<std::vector<ScanResult>> SCAN(std::fstream& file, Table& table, uint32_t tableID, Logger& logger, Pager& pager, Expression* expr = nullptr) {
     assert(file.is_open());
     std::vector<ScanResult> results;
@@ -212,6 +178,36 @@ Row ConvertToRow(const std::vector<Token>& tokens) {
     }
 
     return row;
+}
+std::optional <std::vector<Set>> ConvertToSet(const std::vector<Comparison>& comp_asts, const Table& table) {
+    std::vector<Set> results;
+    for(auto& comp : comp_asts) {
+        try {
+            EnforceColumnIntegrety(comp.attribute, comp.value, table);
+        }
+        catch(const std::runtime_error& e) { 
+                std::cerr << "Integrety Error: " << e.what() << "\n";
+                return std::nullopt;
+        }
+        Set set;
+        assert(comp.comparator.value == "=");
+        auto it = table.id_lookup.find(comp.attribute.value);
+        assert(it != table.id_lookup.end());
+        set.column_index = it->second;
+        switch(comp.value.type) {
+            case TokenType::INT:
+                set.value = static_cast<int32_t>(std::stoi(comp.value.value));
+                break;
+            case TokenType::STRING:
+                set.value = comp.value.value;
+                break;
+            case TokenType::DOUBLE:
+                set.value = std::stod(comp.value.value);
+                break;
+        }
+        results.push_back(set);
+    }
+    return results;
 }
 
 void sortAttributeTokens(std::vector<Token>& attributes, const Table& table) {
@@ -682,7 +678,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             
             DELETE_AST tree = std::move(std::get<DELETE_AST>(AST.tree));
             if(!database.connected) {
-                std::cerr << "Cannot SELECT FROM TABLE while not connected to any DATABASE\n";
+                std::cerr << "Cannot DELETE FROM TABLE while not connected to any DATABASE\n";
                 return false;
             }
             auto its = database.id_lookup.find(tree.table.value);
@@ -716,6 +712,42 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
         }
         case Action::UPDATE: 
         {
+            UPDATE_AST tree = std::move(std::get<UPDATE_AST>(AST.tree));
+            if(!database.connected) {
+                std::cerr << "Cannot UPDATE FROM TABLE while not connected to any DATABASE\n";
+                return false;
+            }
+            auto its = database.id_lookup.find(tree.table.value);
+            if(its == database.id_lookup.end()) {
+                std::cerr << "Table not found\n";
+                return false;
+            }
+            uint32_t tableID = database.id_lookup.at(tree.table.value);
+
+            auto it = pager.tableMetadata.find(tableID);
+            if(it == pager.tableMetadata.end()) {
+                if(!loadTableFile(manager, database.tables.at(tableID))) {
+                    return false;
+                }
+                if(!loadTableMetadata(manager, pager, globalRBHEADER, database.tables.at(tableID))) {
+                    return false;
+                }
+            }
+            Expression* expr = tree.WHERE_ROOT.get();
+            auto scannedResults = SCAN(manager.files.at(tableID), database.tables.at(tableID), tableID, logger, pager, expr);
+            if(!scannedResults) {
+                return false;
+            }
+            auto set = ConvertToSet(tree.set, database.tables.at(tableID));
+            if(!set) {
+                return false;
+            }
+            if(!UPDATE(manager.files.at(tableID), *scannedResults, tableID, pager, logger, *set)) {
+                return false;
+            }
+            else {
+                std::cout << "DELETE FROM TABLE\n";
+            }
             
             break;
         }
@@ -744,35 +776,46 @@ int main() {
     if(!START(cache.database, cache.manager, cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    /*
     if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Alice', 95.0), ('Bob', 78.0), ('Charlie', 92.0), ('Diana', 85.0), ('Eve', 88.0), ('Frank', 72.0), ('Grace', 91.0), ('Henry', 76.0), ('Iris', 89.0), ('Jack', 84.0));", result)) {
         return 1;
     }
-    */
     if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES ('Kirche', 69.0);", result)) {
         return 1;
     }
     //std::cout << "Crashing now\n";
     //return 0;
-    if(!EXECUTE(cache, "DELETE FROM cool_dudes WHERE name = 'Kirche';", result)) {
+    
+    if(!EXECUTE(cache, "UPDATE cool_dudes SET name = 'Yohann the femboy', grade = 6.7 WHERE name = 'Kirche';", result)) {
         return 1;
     }
-    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE name = 'Kirche';", result)) {
+    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE name = 'Yohann the femboy';", result)) {
         return 1;
     }
 
-    assert(result.values.size() == 0);
-    /*
-    for(auto& result : result.values) {
-        
-        int32_t id = result.get<int32_t>(0);
-        std::string name = result.get<std::string>(1);
-        double grade = result.get<int32_t>(2);
-        std::cout << "------------------\n";
-        std::cout << "name: " << name << "\n grade: " << grade << "\n";
+    //assert(result.values.size() == 0);
+    if(result.values.size() > 0) {
+        std::cout << "---------RESULTS---------\n";
+        for (size_t i = 0; i < result.values.size(); i++) {
+            for (size_t j = 0; j < result.values[i].values.size(); j++) {
+                if(j != 0) std::cout << ", ";
+                std::visit([](const auto& x) {
+                    using T = std::decay_t<decltype(x)>;
+                    if constexpr (std::is_same_v<T, int32_t>) {
+                        std::cout << x;
+                    }
+                    else if constexpr (std::is_same_v<T, std::string>) {
+                        std::cout << x;
+                    }
+                    else if constexpr (std::is_same_v<T, double>) {
+                        std::cout << x;
+                    }
+                }, result.values[i].values[j]);
+            }
+            std::cout << "\n";
+        }
+
+
     }
-    std::cout << "------------------\n";
-    */
     if(!COMMIT(cache.database, cache.manager, cache.logger, cache.pager, globalTBHEADER, globalDBHEADER, globalRBHEADER)) {
         return 1;
     }

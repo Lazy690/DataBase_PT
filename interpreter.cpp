@@ -445,7 +445,7 @@ std::vector<Comparison> handle_set(Cursor& cursor) {
             expect_value = true;
         }
     }
-    cursor.skip();
+    //cursor.skip();
     return comps;
 
 }
@@ -754,6 +754,7 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             if ( cursor.match("WHERE") ) {
                 update.WHERE_ROOT = Handle_Expression(cursor);
             }
+            std::cout << "Index: " << cursor.tokens[cursor.index].value << "\n";
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
             
             AST.tree = std::move(update);

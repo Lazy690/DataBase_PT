@@ -1336,10 +1336,6 @@ bool SYNC(const DataBase& database, FileManager& manager, LoggerHeader& globalLo
 // Scan Section
 //===================================
 
-struct Set {
-    size_t column_index = 0;
-    std::variant<int32_t, std::string, double> value;
-};
 
 bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
 
@@ -1814,14 +1810,7 @@ bool DELETE(std::fstream& file, std::vector<ScanResult>& results, uint32_t table
     return true;
 }
 
-bool UPDATE(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, std::vector<Set> sets, QueryParams* params) {
-
-  
-    auto resultsPtr = ScanTable(file, tableID, logger, pager, params);
-    if(!resultsPtr) {
-        return false;
-    }
-    std::vector<ScanResult> results = *resultsPtr;
+bool UPDATE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, Logger& logger, std::vector<Set> sets) {
 
     for (auto& result : results) {
         uint32_t ID = result.pageId;

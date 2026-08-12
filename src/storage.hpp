@@ -289,3 +289,8 @@ bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pag
             TB_Header& globalTBHEADER, DB_Header& globalDBHEADER, RecordHeader& globalRBHEADER);
 bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, Row& row);
 bool DELETE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, Logger& logger);
+struct Set {
+    size_t column_index = 0;
+    std::variant<int32_t, std::string, double> value;
+};
+bool UPDATE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, Logger& logger, std::vector<Set> sets);
