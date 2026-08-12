@@ -41,7 +41,7 @@ struct QueryFilter {
 
 using column_name  = std::string;
 using column_index = uint32_t;
-bool EVALUATE_COMPARISON(ComparisonNode comparison, std::unordered_map<column_name, column_index>& columns, Row& row) {
+bool EVALUATE_COMPARISON(ComparisonNode comparison, const std::unordered_map<column_name, column_index>& columns, Row& row) {
     
     auto it = columns.find(comparison.attribute.value);
     assert(it != columns.end());
@@ -92,20 +92,22 @@ bool EVALUATE_COMPARISON(ComparisonNode comparison, std::unordered_map<column_na
     return false;
 }
 
-bool EVALUATE(Expression* node, std::unordered_map<column_name, column_index>& columns, Row& row) {
+bool EnforceColumnIntegrety(const Token& attribute, const Token& value, const Table& table);
+bool EVALUATE(Expression* node, const Table& table, Row& row) {
     if (auto* comparison = dynamic_cast<ComparisonNode*>(node)) {
-        return EVALUATE_COMPARISON(*comparison, columns, row);
+        EnforceColumnIntegrety(comparison->attribute, comparison->value, table);
+        return EVALUATE_COMPARISON(*comparison, table.id_lookup, row);
     }
     if (auto* andNode = dynamic_cast<AndNode*>(node)) {
-        return EVALUATE(andNode->left.get(), columns, row) &&
-               EVALUATE(andNode->right.get(), columns, row);
+        return EVALUATE(andNode->left.get(), table, row) &&
+               EVALUATE(andNode->right.get(), table, row);
     }
     if (auto* orNode = dynamic_cast<OrNode*>(node)) {
-        return EVALUATE(orNode->left.get(), columns, row) ||
-               EVALUATE(orNode->right.get(), columns, row);
+        return EVALUATE(orNode->left.get(), table, row) ||
+               EVALUATE(orNode->right.get(), table, row);
     }
     if (auto* notNode = dynamic_cast<NotNode*>(node)) {
-        return EVALUATE(notNode->next.get(), columns, row);
+        return EVALUATE(notNode->next.get(), table, row);
     }
     throw std::runtime_error("Unknown expression node");
 }
@@ -162,8 +164,13 @@ std::optional<std::vector<ScanResult>> SCAN(std::fstream& file, Table& table, ui
                 results.push_back(result);
                 continue;
             }
-            if(EVALUATE(expr, table.id_lookup, result.row)) {
-                results.push_back(result);
+            try {
+                if(EVALUATE(expr, table, result.row)) {
+                    results.push_back(result);
+                }
+            } catch(const std::runtime_error& e) {
+                std::cerr << "Integrety Error: " << e.what() << "\n";
+                return std::nullopt;
             }
         }
     }
@@ -245,6 +252,7 @@ bool VerifyColumnName(const Token& attribute, const Table& table) {
     auto it = table.id_lookup.find(attribute.value);
     if(it == table.id_lookup.end()) {
         std::cerr << "attribute: " << attribute.value << " Does not Exist\n";
+        throw std::runtime_error("Attribute does not exist");
         return false;
     }
     return true;
@@ -309,6 +317,11 @@ bool EnforceColumnIntegrety(const std::vector<Token>& attributes, const std::vec
         std::cerr << "Integrety Error: " << e.what() << "\n";
         return false;
     }
+    return true;
+}
+bool EnforceColumnIntegrety(const Token& attribute, const Token& value, const Table& table) {
+        if(!VerifyColumnName(attribute, table)) return false;
+        if(!VerifyTypeIntegrety(attribute, value, table)) return false;
     return true;
 }
 bool EnforceIntegretyList(std::fstream& file, Pager& pager, const Table& table, 
@@ -681,7 +694,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
     return true;
 }
 
-int testExe() {
+int main() {
     
     CacheManagement cache;
     ResultSet result;
@@ -700,11 +713,9 @@ int testExe() {
     if(!START(cache.database, cache.manager, cache.logger, globalLogHeader, globalImageHeader)) {
         return 1;
     }
-    /*
     if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Alice', 95.0), ('Bob', 78.0), ('Charlie', 92.0), ('Diana', 85.0), ('Eve', 88.0), ('Frank', 72.0), ('Grace', 91.0), ('Henry', 76.0), ('Iris', 89.0), ('Jack', 84.0));", result)) {
         return 1;
     }
-    */
     /*
     if(!EXECUTE(cache, "INSERT (name, grade) INTO cool_dudes VALUES (('Markiemoo', 6.9), ('Cameleon', 6.7), ('Larry', 1.8));", result)) {
         return 1;
@@ -712,7 +723,7 @@ int testExe() {
     */
     //std::cout << "Crashing now\n";
     //return 0;
-    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE grade >= 85 AND grade <= 90 AND name != 'Eve';", result)) {
+    if(!EXECUTE(cache, "SELECT * FROM cool_dudes WHERE grade >= 85 AND grade <= '90' AND name != 'Eve';", result)) {
         return 1;
     }
 

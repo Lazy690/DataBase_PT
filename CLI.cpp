@@ -1,8 +1,15 @@
 #include <iostream>
 #include <string>
 #include "execute.hpp"
+#include "src/storage.hpp"
+#include "src/filesys.hpp"
 
-int main() {
+DB_Header oglobalDBHEADER{0x44415641, 3};
+TB_Header oglobalTBHEADER{0x44415441, 5};
+RecordHeader oglobalRBHEADER{0x44415441, 5};
+LoggerHeader oglobalLogHeader{0x44518449, 4};
+BeforeImageHeader oglobalImageHeader{0x75314648, 1};
+int mainnn() {
     CacheManagement cache;
 
     std::string input = "";
