@@ -277,19 +277,15 @@ std::unique_ptr<ComparisonNode> ParseComparison(Cursor& cursor) {
     auto comp = std::make_unique<ComparisonNode>();
     if(isKeyWord(cursor.peek())) throw("Expected Attribute name in Comparoson");
     comp->attribute = cursor.consume();
-    std::cout << "attribute: " << comp->attribute.value << "\n";
     if(!isKeyComparator(cursor.peek())) throw("Expected comparison Token after Attribute decleration");
     comp->comparator = cursor.consume();
-    std::cout << "comparator: " << comp->comparator.value << "\n";
     if(isKeyWord(cursor.peek())) throw("Expected Value after comparison Token");
     comp->value = cursor.consume();
-    std::cout << "value: " << comp->value.value << "\n";
     return comp;
 }
 std::unique_ptr<Expression> ParsePrimary(Cursor& cursor);
 
 std::unique_ptr<Expression> ParseAnd(Cursor& cursor) {
-    std::cout << "Parsing AND\n";
     auto left = ParsePrimary(cursor);
     while (cursor.match("AND")) {
         auto node = std::make_unique<AndNode>();
@@ -301,10 +297,8 @@ std::unique_ptr<Expression> ParseAnd(Cursor& cursor) {
 }
 //A OR B
 std::unique_ptr<Expression> ParseOr(Cursor& cursor) {
-    std::cout << "Parsing OR\n";
     auto left = ParseAnd(cursor);
     while (cursor.match("OR")) {
-        std::cout << "Matched OR\n";
         auto node = std::make_unique<OrNode>();
         node->left  = std::move(left);
         node->right = ParseAnd(cursor);
@@ -314,7 +308,6 @@ std::unique_ptr<Expression> ParseOr(Cursor& cursor) {
     return left;
 }
 std::unique_ptr<Expression> ParsePrimary(Cursor& cursor) {
-    std::cout << "Parsing Primary\n";
     if(cursor.match("(")) {
         auto expression  = ParseOr(cursor);
         if(!cursor.match(")")) throw ("Parenthesis was not closed in WHERE clause decleration");
@@ -663,6 +656,7 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             else if(cursor.match("TABLE")) {
                 drop.type = DROP_TYPE::DROP_TABLE;
             }
+            else throw std::runtime_error("Expected target specification after 'DROP' token.");
 
             if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected table name after token 'DROP'");
             drop.subject = cursor.consume();
@@ -754,7 +748,6 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             if ( cursor.match("WHERE") ) {
                 update.WHERE_ROOT = Handle_Expression(cursor);
             }
-            std::cout << "Index: " << cursor.tokens[cursor.index].value << "\n";
             if(!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command");
             
             AST.tree = std::move(update);

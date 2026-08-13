@@ -71,9 +71,6 @@ bool EVALUATE_COMPARISON(ComparisonNode comparison, const std::unordered_map<col
             return compare(std::get<int32_t>(entry_to_compare->value), condition, static_cast<int32_t>(std::stoi(comparison.value.value)));
             break;
         case DataType::STRING:
-            std::cout << "Val from row: " << std::get<std::string>(entry_to_compare->value);
-            std::cout << " " << comparison.comparator.value;
-            std::cout << " Val from imput: " << comparison.value.value << "\n";
             {
             bool result = compare(std::get<std::string>(entry_to_compare->value), condition, comparison.value.value);
             return result;
@@ -121,7 +118,7 @@ std::optional<std::vector<ScanResult>> SCAN(std::fstream& file, Table& table, ui
     } 
     for (uint32_t pageID = 0; pageID < pager.tableMetadata[tableID].PAGECOUNT; pageID++) {
         std::vector<ScanResult> ScannedRows;
-        if(!ScanRowsFromPage(file, ScannedRows, tableID, pageID, logger, pager)) {
+        if(!ScanRowsFromPage(file, ScannedRows, tableID, pageID, pager)) {
             std::cerr << "Failed to load rows from page\n";
             return std::nullopt;
         }
@@ -470,6 +467,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                 return false;
             }
             else if(status == CONNECTION_STATUS::CONNECTED) {
+                //printDataBase(database);
                 std::cout << "CONNECT DATABASE.\n";
                 return true;
             }
@@ -548,16 +546,17 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                     return false;
                 }
                 std::string table_name = tree.subject.value;
+                auto it = pager.tableMetadata.find(database.id_lookup.at(table_name));
+                if(it != pager.tableMetadata.end()) {
+                    pager.tableMetadata.erase(database.id_lookup.at(table_name));
+                }
 
                 if(!DROP_TABLE(database, table_name)) {
                     return false;
                 }
-                else {
-                    pager.tableMetadata.erase(database.id_lookup.at(table_name));
-                    std::cout << "DROP TABLE\n";
-                }
+                std::cout << "DROP TABLE\n";
             }
-            
+
             break;
         }
         case Action::INSERT: 
@@ -608,11 +607,20 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                 //Temporary
                 //printRow(row);
 
-                if(!INSERT(manager.files.at(tableID), tableID, pager, logger, row)) {
-                    return false;
+                if(logger.transaction.start) {
+                    if(!INSERT(manager.files.at(tableID), tableID, pager, logger, row)) {
+                        return false;
+                    }
+                    INSERT_DATA* hold = current->next.get();
+                    current = hold;
+                } 
+                else {
+                    if(!INSERT(manager.files.at(tableID), tableID, pager, row)) {
+                        return false;
+                    }
+                    INSERT_DATA* hold = current->next.get();
+                    current = hold;
                 }
-                INSERT_DATA* hold = current->next.get();
-                current = hold;
             }
 
             std::cout << "INSERT TABLE\n";
@@ -702,12 +710,17 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             if(!scannedResults) {
                 return false;
             }
-            if(!DELETE(manager.files.at(tableID), *scannedResults, tableID, pager, logger)) {
-                return false;
+            if(logger.transaction.start) {
+                if(!DELETE(manager.files.at(tableID), *scannedResults, tableID, pager, logger)) {
+                    return false;
+                }
             }
             else {
-                std::cout << "DELETE FROM TABLE\n";
+                if(!DELETE(manager.files.at(tableID), *scannedResults, tableID, pager)) {
+                    return false;
+                }
             }
+            std::cout << "DELETE FROM TABLE\n";
             break;
         }
         case Action::UPDATE: 
@@ -742,12 +755,17 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             if(!set) {
                 return false;
             }
-            if(!UPDATE(manager.files.at(tableID), *scannedResults, tableID, pager, logger, *set)) {
-                return false;
+            if(logger.transaction.start) {
+                if(!UPDATE(manager.files.at(tableID), *scannedResults, tableID, pager, logger, *set)) {
+                    return false;
+                }
             }
             else {
-                std::cout << "DELETE FROM TABLE\n";
+                if(!UPDATE(manager.files.at(tableID), *scannedResults, tableID, pager, *set)) {
+                    return false;
+                }
             }
+            std::cout << "UPDATE TABLE\n";
             
             break;
         }
@@ -757,7 +775,7 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
     return true;
 }
 
-int main() {
+int mainnn() {
     
     CacheManagement cache;
     ResultSet result;
@@ -816,7 +834,7 @@ int main() {
 
 
     }
-    if(!COMMIT(cache.database, cache.manager, cache.logger, cache.pager, globalTBHEADER, globalDBHEADER, globalRBHEADER)) {
+    if(!COMMIT(cache.database, cache.manager, &cache.logger, cache.pager, globalTBHEADER, globalDBHEADER, globalRBHEADER)) {
         return 1;
     }
 

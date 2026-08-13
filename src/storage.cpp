@@ -1377,9 +1377,9 @@ bool ScanAllRows(std::vector<ScanResult>& results, const Page& page) {
     return true;
 }
 
-bool ScanRowsFromPage(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, uint32_t pageID,Logger& logger, Pager& pager) {
+bool ScanRowsFromPage(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, uint32_t pageID, Pager& pager) {
     assert(file.is_open());
-    Page* page = requestPage(file, pager, {tableID, pageID}, &logger);
+    Page* page = requestPage(file, pager, {tableID, pageID});
     if(!page) {
         std::cerr << "Page not found\n";
         return false;
@@ -1705,40 +1705,31 @@ bool START(const DataBase& database, FileManager& manager, Logger& logger, Logge
     return true;
 }
 
-bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pager,
+bool COMMIT(DataBase& database, FileManager& manager, Logger* logger, Pager& pager,
             TB_Header& globalTBHEADER, DB_Header& globalDBHEADER, RecordHeader& globalRBHEADER) {
-
-    assert(logger.transaction.start);
-    assert(!logger.transaction.header.commited);
-    
-    //Simulated crash
-    //return false;
 
     if(!COMMIT_DATABASE_DATA(database, globalTBHEADER, globalDBHEADER, globalRBHEADER)){
         return false;
     }
 
-    if(!flush_logger_header(*logger.LoggerFile, logger.header)) {
-        std::cerr << "Failed to flush logger's header\n";
-        return false;
+    if(logger) {
+        assert(logger->transaction.start);
+        assert(!logger->transaction.header.commited);
+        if(!flush_logger_header(*logger->LoggerFile, logger->header)) {
+            std::cerr << "Failed to flush logger's header\n";
+            return false;
+        }
+
+        logger->transaction.header.commited = true;
+        uint32_t flush_offset = logger->header.LatestCheckpointOffset;
+        if(!flush_transaction(*logger->LoggerFile, logger->transaction, flush_offset)) {
+            return false;
+        }
+
+        logger->transaction = {};
     }
 
-    logger.transaction.header.commited = true;
-    uint32_t flush_offset = logger.header.LatestCheckpointOffset;
-    if(!flush_transaction(*logger.LoggerFile, logger.transaction, flush_offset)) {
-        return false;
-    }
-
-    /*
-    if(!flush_logger_state(logger.LoggerFile, logger, LogCMD::COMMIT)) {
-        std::cerr << "Failed to flush logger's state\n";
-        return false;
-    }
-    */
-    int count = 0;
     for (auto& [key, page] : pager.pages) {
-        //if (count == 2) return false;
-        count++;
         if(!page.dirty) continue;
         
         std::filesystem::path filePath = std::filesystem::path(BASE_DIRECTORY);
@@ -1756,7 +1747,7 @@ bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pag
     for(auto& [id, file] : manager.files) {
         flush_metadata(file, pager.tableMetadata[id]);
     }
-    EmptyLogger(logger);
+    //EmptyLogger(logger);
 
     std::filesystem::path backup_path = BASE_DIRECTORY;
     backup_path /= BACKUPFOLDER_NAME;
@@ -1764,7 +1755,6 @@ bool COMMIT(DataBase& database, FileManager& manager, Logger& logger, Pager& pag
 
     std::filesystem::remove_all(backup_path);
 
-    logger.transaction = {};
 
     return true;
 }
@@ -1810,6 +1800,23 @@ bool DELETE(std::fstream& file, std::vector<ScanResult>& results, uint32_t table
     return true;
 }
 
+bool DELETE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager) {
+
+    for (auto& result : results) {
+        uint32_t ID = result.pageId;
+        Page* page = requestPage(file, pager, {tableID, ID});
+        if (!page) {
+            return false;
+        }
+
+        result.row.tumpstoned = 1;
+
+        insertRowIntoBuff(page->buffer, result.row, result.offset);
+        mark_dirty(*page);
+    }
+
+    return true;
+}
 bool UPDATE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, Logger& logger, std::vector<Set> sets) {
 
     for (auto& result : results) {
@@ -1863,6 +1870,44 @@ bool UPDATE(std::fstream& file, std::vector<ScanResult>& results, uint32_t table
     
     return true;
 }
+bool UPDATE(std::fstream& file, std::vector<ScanResult>& results, uint32_t tableID, Pager& pager, std::vector<Set> sets) {
+
+    for (auto& result : results) {
+        uint32_t ID = result.pageId;
+        Page* page = requestPage(file, pager, {tableID, ID});
+        if (!page) {
+            return false;
+        }
+        result.row.tumpstoned = 1;
+
+        insertRowIntoBuff(page->buffer, result.row, result.offset);
+        mark_dirty(*page);
+        result.row.tumpstoned = 0;
+        
+        Row& UpdatedRow = result.row;
+        for (auto set : sets) {
+            UpdatedRow.values[set.column_index].value = set.value;
+        }
+        UpdatedRow.RecalculateSize();
+
+        //temporary
+        Logger logger;
+        Page* PageWithSpace = requestPageWithSpace(file, logger, pager, tableID, UpdatedRow);
+        if(!PageWithSpace) {
+            return false;
+        }
+
+        size_t insert_position = PageWithSpace->header.freespace;
+
+        PageWithSpace->header.freespace += UpdatedRow.size();
+        PageWithSpace->header.NumRows++;
+
+        insertRowIntoBuff(PageWithSpace->buffer, UpdatedRow, insert_position);
+        mark_dirty(*PageWithSpace);
+    }
+    
+    return true;
+}
 
 bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, Row& row) {
  
@@ -1883,6 +1928,26 @@ bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Logger& logger, 
     AppendLog(logger, log);
     assert(logger.transaction.buffer.size() == (beforeSize + log.size()));
     logger.transaction.header.NumLogs++;
+
+    insertRowIntoBuff(page->buffer, row, insert_position);
+
+    mark_dirty(*page);
+ 
+    return true;
+}
+bool INSERT(std::fstream& file, uint32_t tableID, Pager& pager, Row& row) {
+    //temporary
+    Logger logger;
+ 
+    Page* page = requestPageWithSpace(file, logger, pager, tableID, row);
+    if (!page) {
+        return false;
+    }
+
+    size_t insert_position = page->header.freespace;
+
+    page->header.freespace += row.size();
+    page->header.NumRows += 1;
 
     insertRowIntoBuff(page->buffer, row, insert_position);
 

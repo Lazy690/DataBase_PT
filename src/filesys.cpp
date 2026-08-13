@@ -489,14 +489,14 @@ bool delete_table_folder(fs::path dir) {
 }
 
 bool COMMIT_DATABASE_DATA(const DataBase& database, const TB_Header& globalTableHeader, const DB_Header& globalDatabaseHeader, const RecordHeader& globalRecordHeader) {
-    
+ 
     std::fstream DBFile(fs::path(database.baseDir) / DATABASE_FILENAME, std::ios::binary | std::ios::out);
     if(!DBFile) {
         std::cerr << "Failed to open database metadate file\n";
         return false;
     }
     if(!flush_database_data(DBFile, database)) return false;
-    
+ 
     for (auto& dropedTableid : database.droped_tables) {
         fs::path deletePath = database.baseDir;
         deletePath /= std::to_string(dropedTableid);
@@ -538,7 +538,7 @@ bool CREATE_DATABASE(std::string input_DBname, DB_Header& globalHeader) {
 
     if(!fs::exists(db_path)) {
         fs::create_directory(db_path);
-        if(!createDataBaseFile(db_path, dbName, globalHeader)) {
+        if(!createDataBaseFile(db_path, input_DBname, globalHeader)) {
             std::cerr << "Failed to create database metadata" << std::endl;
             return false;
         };
@@ -569,9 +569,9 @@ bool DROP_DATABASE(std::string input_DBname) {
 }
 CONNECTION_STATUS CONNECT(std::string input_DBname, DataBase& database, DB_Header& globalDatabaseHeader, TB_Header& globalTableHeader) {
 
-    std::string dbName = input_DBname + "_DB";
+    std::string folderName = input_DBname + "_DB";
     fs::path db_path = BASE_DIRECTORY;
-    db_path /= dbName;
+    db_path /= folderName;
 
     if(!fs::exists(db_path)) {
         return CONNECTION_STATUS::NOT_EXISTS;

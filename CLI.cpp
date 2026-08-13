@@ -9,7 +9,8 @@ TB_Header oglobalTBHEADER{0x44415441, 5};
 RecordHeader oglobalRBHEADER{0x44415441, 5};
 LoggerHeader oglobalLogHeader{0x44518449, 4};
 BeforeImageHeader oglobalImageHeader{0x75314648, 1};
-int mainnn() {
+
+int main() {
     CacheManagement cache;
 
     std::string input = "";
@@ -17,7 +18,7 @@ int mainnn() {
     std::cout << "------ SQLang ------\n";
     while(true) {
         ResultSet result;
-        std::cout << "SQLang >> ";
+        std::cout << "<" << cache.database.name << "> SQLang >> ";
         std::getline(std::cin, input);
         
         if(input == "q") break;
@@ -54,6 +55,10 @@ int mainnn() {
             }
         }
 
+        if(!COMMIT(cache.database, cache.manager, nullptr, cache.pager, oglobalTBHEADER, oglobalDBHEADER, oglobalRBHEADER)) {
+            return 1;
+        }
+        std::cout << "\n";
         input = "";
     }
     return 0;
