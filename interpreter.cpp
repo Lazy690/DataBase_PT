@@ -41,6 +41,8 @@ std::unordered_set<std::string> KeyWords {
       "DROP",
       "TABLE",
       "DATABASE",
+      "INDEX",
+      "ON",
       "IF",
       "NOT",
       "EXISTS",
@@ -615,6 +617,20 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             else if(cursor.match("TABLE")) {
                 create.type = CREATE_TYPE::CREATE_TABLE;
             }
+            else if(cursor.match("INDEX")) {
+                create.type = CREATE_TYPE::CREATE_INDEX;
+                cursor.expect("ON");
+                if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected table name after tokens 'CREATE ON'");
+                create.subject = cursor.consume();
+                cursor.expect("(");
+                if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected column name after token '('");
+                create.attribute = cursor.consume();
+                cursor.expect(")");
+
+                if (!cursor.is_END()) throw std::runtime_error("Invalid tokens at end of command"); 
+                AST.tree = std::move(create);
+                break;
+            }
             else throw std::runtime_error("Expected target specification after 'CREATE' token.");
 
             if(isKeyWord(cursor.peek())) throw std::runtime_error("Expected table or database name after token 'CREATE'");
@@ -625,7 +641,6 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
                 AST.tree = std::move(create);
                 break;
             }
-            
             if(cursor.match("IF")) {
                 if(cursor.match("NOT")) {
                     if(cursor.match("EXISTS")) {
@@ -655,6 +670,9 @@ AbstractSyntaxTree PARSE(const std::vector<Token>& tokens) {
             }
             else if(cursor.match("TABLE")) {
                 drop.type = DROP_TYPE::DROP_TABLE;
+            }
+            else if(cursor.match("INDEX")) {
+                drop.type = DROP_TYPE::DROP_INDEX;
             }
             else throw std::runtime_error("Expected target specification after 'DROP' token.");
 
@@ -842,8 +860,12 @@ void print_AST(const T& ast) {
         else if (ast.type == CREATE_TYPE::CREATE_TABLE) {
             std::cout << "Creating Table: " << ast.subject.value << "\n";
         }
+        else if (ast.type == CREATE_TYPE::CREATE_INDEX) {
+            std::cout << "Creating Index on table: " << ast.subject.value << "\n";
+        }
         print_overrite(ast.is_overrite);
         print_create_cols(ast.columns);
+        if(!ast.attribute.value.empty()) std::cout << "Column: " << ast.attribute.value;
         return;
     }
     if constexpr (std::is_same_v<T, DROP_AST>) {
@@ -852,6 +874,9 @@ void print_AST(const T& ast) {
         }
         else if (ast.type == DROP_TYPE::DROP_TABLE) {
             std::cout << "Dropping Table: " << ast.subject.value << "\n";
+        }
+        else if (ast.type == DROP_TYPE::DROP_INDEX) {
+            std::cout << "Dropping INDEX: " << ast.subject.value << "\n";
         }
         return;
     }
@@ -898,6 +923,9 @@ int test_interpreter(std::string sql) {
     AbstractSyntaxTree AST;
     try {
         std::vector<Token> tokens = TOKENIZE(sql);
+        for (auto token : tokens) {
+            std::cout << token.value << "\n";
+        }
         AST = PARSE(tokens);
     }
     catch (const std::runtime_error& e) {
@@ -905,13 +933,13 @@ int test_interpreter(std::string sql) {
         return 1;
     }
 
-    print_AST(std::get<DELETE_AST>(AST.tree));
+    print_AST(std::get<CREATE_AST>(AST.tree));
     std::cout << "compiles!\n";
     return 0;
 }
 
 /*
 int main() {
-    test_interpreter("DELETE FROM dudes WHERE name = 'kirche' AND age > 18 OR name = 'E;R' AND age < 20;");
+    test_interpreter("CREATE INDEX ON dudes(id);");
 }
 */

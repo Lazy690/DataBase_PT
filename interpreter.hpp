@@ -1,6 +1,7 @@
 #include <memory>
 #include <variant>
 #include <vector>
+#include <string>
 
 #include "classes.h"
 #pragma once
@@ -28,10 +29,12 @@ enum class Action {
 enum class CREATE_TYPE {
     CREATE_DATABASE,
     CREATE_TABLE,
+    CREATE_INDEX
 };
 enum class DROP_TYPE {
     DROP_DATABASE,
     DROP_TABLE,
+    DROP_INDEX
 };
 
 enum class ConnType {
@@ -233,6 +236,7 @@ struct CREATE_AST {
     bool is_overrite = true;
     Token subject;
     std::vector<Column_AST> columns;  
+    Token attribute;
 
 };
 

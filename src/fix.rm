@@ -1,4 +1,0 @@
-[X] - You have to make sure that you can actually read database name from
-the DB metadata.
-[X] - Make it so whenever you CREATE table it doesnt endlessly dupe entries in metadata
-[ ] - make DROP Table and make sure it rewrites the metadata to reflect it.

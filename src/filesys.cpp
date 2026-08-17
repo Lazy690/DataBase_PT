@@ -137,7 +137,17 @@ bool flush_recordbank_header(std::fstream& file, RecordHeader header) {
     file.seekp(0, std::ios::beg);
     file.write(reinterpret_cast<const char*>(&header), sizeof(RecordHeader));
     if(!file) {
-        std::cerr << "Failed to write header" << std::endl;
+        std::cerr << "Failed to write record bank header" << std::endl;
+        return false;
+    }
+    return true;
+}
+//Index
+bool flush_index_header(std::fstream& file, IndexHeader header) {
+    file.seekp(0, std::ios::beg);
+    file.write(reinterpret_cast<const char*>(&header), sizeof(RecordHeader));
+    if(!file) {
+        std::cerr << "Failed to write index header" << std::endl;
         return false;
     }
     return true;
@@ -458,6 +468,13 @@ bool createRecordBankFile(fs::path path, RecordHeader globalHeader) {
     }
     return true;
 }
+bool createIndexFile(fs::path path, IndexHeader this_header) {
+    std::fstream file(fs::path(path) / INDEX_FILENAME, std::ios::binary | std::ios::out | std::ios::trunc);
+    if(!flush_index_header(file, this_header)) {
+        return false;
+    }
+    return true;
+}
 
 bool create_new_table_folder(fs::path dir, const TB_Header& globalTableHeader, const RecordHeader& globalRecordHeader) {
     /*
@@ -485,9 +502,20 @@ bool delete_table_folder(fs::path dir) {
     if (!fs::exists(dir)) return true;
     fs::remove_all(dir);
     return true;
-
 }
 
+bool create_new_index_folder(fs::path dir, const IndexHeader& this_header) {
+    fs::create_directory(dir);
+    if(!createIndexFile(dir, this_header)) {
+        return false;
+    }
+    return true;
+}
+bool delete_index_folder(fs::path dir) {
+    if (!fs::exists(dir)) return true;
+    fs::remove_all(dir);
+    return true;
+}
 bool COMMIT_DATABASE_DATA(const DataBase& database, const TB_Header& globalTableHeader, const DB_Header& globalDatabaseHeader, const RecordHeader& globalRecordHeader) {
  
     std::fstream DBFile(fs::path(database.baseDir) / DATABASE_FILENAME, std::ios::binary | std::ios::out);
@@ -642,12 +670,6 @@ bool CREATE_TABLE(DataBase& database, const TB_Header& globalHeader, RecordHeade
     database.created_tables.insert(table.header.ID);
     database.droped_tables.erase(table.header.ID);
 
-    /*
-    if(!createRecordBankFile(table.path, globalRBHEADER)) {
-        return false;
-    }
-    */
-
     return true;
 }
 bool DROP_TABLE(DataBase& database, std::string table_name) {
@@ -669,58 +691,38 @@ bool DROP_TABLE(DataBase& database, std::string table_name) {
     return true;
 }
 
-/*
-int test_fs() {
-    std::string name = "WorkSpace";
-
-    if(!CREATE_DATABASE("WorkSpace", globalDBHEADER)) {
-        std::cerr << "CREATE DATABASE command failed to execute." << std::endl;
-        return 1;
-    }
-
-    DataBase database;
-    
-    
-    CONNECTION_STATUS status_code = CONNECT(name, database, globalDBHEADERf, globalTBHEADERf);
-    if(status_code != CONNECTION_STATUS::CONNECTED) {
-        std::cerr << "Failed to connect to db\n";
-        return 1;
-    }
-
-    printDataBase(database);
-    std::vector<Column> a = {{
-                             {DataType::INTEIRO, "id", {true, true, true, true, false}}, 
-                             {DataType::TEXTO, "name", {}}, 
-                             {DataType::REAL, "grade", {}}
-                            }};
-
-    std::vector<Column> b = {{
-                             {DataType::INTEIRO, "id", {true, true, true, true, false}},
-                             {DataType::TEXTO, "Weekday", {}}, 
-                             {DataType::INTEIRO, "isManditory", {}}
-                            }};
-
-    if(!CREATE_TABLE(database, globalTBHEADERf, "dudes", a, true)) {
-        std::cerr << "CREATE TABLE command failed to execute." << std::endl;
-        return 1;
-    }
-    if(!CREATE_TABLE(database, globalTBHEADERf, "Schedule", b, true)) {
-        std::cerr << "CREATE TABLE command failed to execute." << std::endl;
-        return 1;
-    }
-    if(!DROP_TABLE(database, "dudes")) { 
-        std::cerr << "DROP TABLE command failed to execute." << std::endl;
-        return 1;
-    }
-
-    if(!COMMIT_DATABASE_DATA(database, globalTBHEADERf, globalDBHEADERf, globalRBHEADERf)) {
-        std::cerr << "Failed to commit changes\n";
-        return 1;
-    }
-
-    std::cout << "Worked\n";
-    return 0; 
+std::string BuildIDXFolderName(uint32_t columnID) {
+    std::string idx_folderName = "index(";
+    idx_folderName += std::to_string(columnID);
+    idx_folderName += ")";
+    return idx_folderName;
 }
-*/
 
+bool CREATE_INDEX(DataBase& database, const IndexHeader& globalHeader, uint32_t columnID, uint32_t tableID) {
+    std::string idx_folderName = BuildIDXFolderName(columnID);
 
+    fs::path path = database.tables.at(tableID).path;
+    path /= idx_folderName;
+
+    if( fs::exists(path) ) {
+        std::cout << "INDEX already Exists\n";
+        return true;
+    }
+
+    IndexHeader this_header;
+    this_header.MAGIC   = globalHeader.MAGIC;
+    this_header.VERSION = globalHeader.VERSION;
+
+    this_header.ColumnID = columnID;
+    this_header.TableId  = tableID;
+    this_header.Type     = database.tables[tableID].schema[columnID].type;
+    
+    if(!create_new_index_folder(path, this_header)) {
+        return false;
+    }
+
+    return true;
+}
+bool DROP_INDEX() {
+    return true;
+}

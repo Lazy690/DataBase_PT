@@ -6,17 +6,6 @@
 #include <variant>
 #include <memory>
 
-struct IndexHeader {
-    uint32_t MAGIC;
-    uint32_t VERSION;
-    //This also has a dataType assiciated with it.
-};
-struct MetaDataHeader {
-    uint32_t MAGIC;
-    uint32_t VERSION;
-};  
-
-
 enum class DataType : uint32_t {
     INT      = 1,
     STRING   = 2,

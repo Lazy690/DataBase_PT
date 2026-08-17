@@ -177,6 +177,30 @@ execute.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/execute.cpp.s
 .PHONY : execute.cpp.s
 
+index.o: index.cpp.o
+.PHONY : index.o
+
+# target to build an object file
+index.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/index.cpp.o
+.PHONY : index.cpp.o
+
+index.i: index.cpp.i
+.PHONY : index.i
+
+# target to preprocess a source file
+index.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/index.cpp.i
+.PHONY : index.cpp.i
+
+index.s: index.cpp.s
+.PHONY : index.s
+
+# target to generate assembly for a file
+index.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/index.cpp.s
+.PHONY : index.cpp.s
+
 interpreter.o: interpreter.cpp.o
 .PHONY : interpreter.o
 
@@ -200,6 +224,30 @@ interpreter.s: interpreter.cpp.s
 interpreter.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/interpreter.cpp.s
 .PHONY : interpreter.cpp.s
+
+script.o: script.cpp.o
+.PHONY : script.o
+
+# target to build an object file
+script.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/script.cpp.o
+.PHONY : script.cpp.o
+
+script.i: script.cpp.i
+.PHONY : script.i
+
+# target to preprocess a source file
+script.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/script.cpp.i
+.PHONY : script.cpp.i
+
+script.s: script.cpp.s
+.PHONY : script.s
+
+# target to generate assembly for a file
+script.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/database.dir/build.make CMakeFiles/database.dir/script.cpp.s
+.PHONY : script.cpp.s
 
 src/filesys.o: src/filesys.cpp.o
 .PHONY : src/filesys.o
@@ -264,9 +312,15 @@ help:
 	@echo "... execute.o"
 	@echo "... execute.i"
 	@echo "... execute.s"
+	@echo "... index.o"
+	@echo "... index.i"
+	@echo "... index.s"
 	@echo "... interpreter.o"
 	@echo "... interpreter.i"
 	@echo "... interpreter.s"
+	@echo "... script.o"
+	@echo "... script.i"
+	@echo "... script.s"
 	@echo "... src/filesys.o"
 	@echo "... src/filesys.i"
 	@echo "... src/filesys.s"

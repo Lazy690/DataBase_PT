@@ -51,43 +51,13 @@ read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_
         return value;
     }
 }
-
-//index Declerations
-
-struct Node {
-    PageKey id;
-    Entry entry;
-    uint32_t offset = 0;
-};
-
-struct BranchHeader {
-
-};
-
-struct Branch {
-
-};
-
-struct TreeHeader {
-
-};
-
-struct Tree {
-    //B+ tree
-};
-
-struct Indexer {
-
-};
-
 //===================================
 // File Section
 //===================================
 
 std::fstream openFile(const std::filesystem::path path, std::string fileName) {
     std::fstream file(std::filesystem::path(path) / fileName, std::ios::binary | std::ios::in | std::ios::out);
-    //temporary commented assert
-    //assert(file.is_open());
+    assert(file.is_open());
     return file;
 }
 
@@ -484,6 +454,11 @@ bool flush_page(std::fstream& file, const Page& page) {
     
     file.write(page.buffer.data(), PAGE_SIZE);
 
+    if(!file || file.tellp() != (DataBytesOffs + PAGE_SIZE)) {
+    	std::cerr << "Failed to flush buffer" << std::endl;
+    	return false;
+    }
+
     //std::cout << "Page: " << page.header.id << " flushed successfully\n";
 
     return true;
@@ -564,7 +539,7 @@ bool will_fit(const Page& page, size_t rowSize) {
     return page.header.freespace + rowSize < PAGE_SIZE;
 };
 
-Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger = nullptr) {
+Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger) {
     Page* page = nullptr;
     auto it = pager.pages.find(ID);
     if (it == pager.pages.end()) {
@@ -1507,134 +1482,6 @@ bool ScanUniqueness(std::fstream& file, uint32_t tableID, Pager& pager, size_t c
     }
     return true;
 }
-
-//===================================
-// Index Section
-//===================================
-
-Node CreateNode(PageKey id, Entry entry, uint32_t offset) {
-    assert(offset != 0);
-    assert(offset > PAGE_SIZE);
- 
-    return {id, entry, offset};
-}
-
-std::vector<char> serializeNode(Node& node) {
-    std::vector<char> v;
-    return v;
-
-}
-std::vector<char> serializeBranch(Branch& branch) {
-    std::vector<char> v;
-    return v;
-  
-}
-
-std::optional<Node>
-deserializeNode(std::span<const char> nodeBytes) {
-    return std::nullopt;
-
-}
-
-std::optional<Node>
-deserializeBranch(std::span<const char> branchBytes) {
-    return std::nullopt;
-
-}
-
-bool InsertIntoTree(Tree& tree, Node& node) {
-    return true;
-
-}
-
-bool IndexTable(Tree& tree, Pager& pager, uint32_t tableID, uint32_t column_index) {
- 
-    if(pager.tableMetadata[tableID].PAGECOUNT <= 0) {
-        std::cout << "Table has no pages\n";
-        return true;
-    } 
-    //!!!!!!Temporary!!!!!!
-    std::fstream file("data.bin", std::ios::binary | std::ios::out | std::ios::in);
-    ///////////////////////
-
-    for (uint32_t pageid = 0; pageid < pager.tableMetadata[tableID].PAGECOUNT; pageid++) {
- 
-        Page* page = requestPage(file, pager, {tableID, pageid});
-
-        std::vector<ScanResult> results;
-        if(!ScanAllRows(results, *page)) {
-            std::cerr << "Failed to scan table\n";
-            return false;
-        }
- 
-        std::vector<Node> nodes;
-        for(auto result : results) {
-
-            PageKey ID      = {tableID, pageid};
-            Entry entry     = result.row.values[column_index];
-            uint32_t offset = result.offset;
-
-            Node node = CreateNode(ID, entry, offset);
-
-            if(!InsertIntoTree(tree, node)) {
-                std::cerr << "Failed to insert into B+ tree\n";
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-bool flsuh_branch_header() {
-    return true;
-
-}
-
-bool load_branch_header() {
-    return true;
-
-}
-
-bool flush_branch() {
-
-    return true;
-}
-
-bool load_branch() {
-
-    return true;
-} 
-
-bool flush_tree_header() {
-
-    return true;
-}
-
-bool load_tree_header() {
-
-    return true;
-}
-
-bool validate_tree_header () {
-
-    return true;
-}
-
-bool requestTreeHeader() {
-
-    return true;
-}
-
-bool flush_tree() {
-
-    return true;
-}
-
-bool load_tree() {
-
-    return true;
-}
-
 //===================================
 // Command Section
 //===================================
@@ -1732,8 +1579,7 @@ bool COMMIT(DataBase& database, FileManager& manager, Logger* logger, Pager& pag
     for (auto& [key, page] : pager.pages) {
         if(!page.dirty) continue;
         
-        std::filesystem::path filePath = std::filesystem::path(BASE_DIRECTORY);
-        filePath /= std::to_string(key.tableID);
+        std::filesystem::path filePath = database.tables.at(key.tableID).path;
         if(!loadTableFile(manager, key.tableID, filePath)) {
             return false;
         }
@@ -1746,6 +1592,7 @@ bool COMMIT(DataBase& database, FileManager& manager, Logger* logger, Pager& pag
 
     for(auto& [id, file] : manager.files) {
         flush_metadata(file, pager.tableMetadata[id]);
+        file.flush();
     }
     //EmptyLogger(logger);
 

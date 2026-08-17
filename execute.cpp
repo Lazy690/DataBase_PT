@@ -13,6 +13,7 @@ TB_Header globalTBHEADER{0x44415441, 5};
 RecordHeader globalRBHEADER{0x44415441, 5};
 LoggerHeader globalLogHeader{0x44518449, 4};
 BeforeImageHeader globalImageHeader{0x75314648, 1};
+IndexHeader globalIndexHeader{0x87564464, 1};
 
 struct CacheManagement {
 
@@ -523,6 +524,37 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                     std::cout << "CREATE TABLE\n";
                 }
             }
+            else if(tree.type == CREATE_TYPE::CREATE_INDEX) {
+                if(!database.connected) {
+                    std::cerr << "Not connected to any database\n";
+                    return false;
+                }
+                auto it = database.id_lookup.find(tree.subject.value);
+                if(it == database.id_lookup.end()) {
+                    std::cerr << "Table does not Exist\n";
+                    return false;
+                }
+                uint32_t tableID = database.id_lookup.at(tree.subject.value);
+
+                try {
+                    if(!VerifyColumnName(tree.attribute, database.tables.at(tableID))) {
+                        std::cerr << "Column does not Exist\n";
+                        return false;
+                    }
+                }
+                catch (std::runtime_error& e) {
+                    std::cerr << "Integrety error: " << e.what() << "\n";
+                    return false;
+                }
+                uint32_t column_index = database.tables.at(tableID).id_lookup.at(tree.attribute.value);
+                if (!CREATE_INDEX(database, globalIndexHeader, column_index, tableID)) {
+                    return false;
+                }
+                else {
+                    std::cout << "CREATE INDEX ON " << tree.attribute.value << "\n";
+                    return true;
+                }
+            }
             break;
         }
         case Action::DROP: 
@@ -591,17 +623,22 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
             while(current != nullptr) {
 
                 std::vector<Token> values = std::move(current->tokens);
+                try {
+                    if(!EnforceColumnIntegrety(tree.attributes, values, database.tables.at(tableID))) {
+                        return false;
+                    }
+                    sortRowTokens(values, tree.attributes, database.tables.at(tableID));
+                    if(!EnforceIntegretyList(manager.files.at(tableID), pager, database.tables.at(tableID), tree.attributes, values)) {
+                        return false;
+                    }
+                    if(!handleAutoInciment(database.tables.at(tableID), tree.attributes, values)) {
+                        return false;
+                    }
+                } catch(const std::runtime_error& e) {
+                    std::cerr << "Integrety Error: " << e.what() << "\n";
+                    return false;
+                }
                 
-                if(!EnforceColumnIntegrety(tree.attributes, values, database.tables.at(tableID))) {
-                    return false;
-                }
-                sortRowTokens(values, tree.attributes, database.tables.at(tableID));
-                if(!EnforceIntegretyList(manager.files.at(tableID), pager, database.tables.at(tableID), tree.attributes, values)) {
-                    return false;
-                }
-                if(!handleAutoInciment(database.tables.at(tableID), tree.attributes, values)) {
-                    return false;
-                }
                 Row row = ConvertToRow(values);
                 
                 //Temporary
@@ -651,17 +688,21 @@ bool EXECUTE(CacheManagement& cache, std::string sql, ResultSet& resultSet) {
                     return false;
                 }
             }
-            
-            if(tree.attributes[0].value != "*") {
-                for (auto& attribute : tree.attributes) {
-                    if(!VerifyColumnName(attribute, database.tables.at(tableID))) {
-                        std::cerr << "Column does not Exist\n";
-                        return false;
+            try {
+                if(tree.attributes[0].value != "*") {
+                    for (auto& attribute : tree.attributes) {
+                        if(!VerifyColumnName(attribute, database.tables.at(tableID))) {
+                            std::cerr << "Column does not Exist\n";
+                            return false;
+                        }
                     }
+                    sortAttributeTokens(tree.attributes, database.tables.at(tableID));
                 }
-                sortAttributeTokens(tree.attributes, database.tables.at(tableID));
+                else assert(tree.attributes.size() == 1);
+            } catch(const std::runtime_error& e) {
+                std::cerr << "Integrety Error: " << e.what() << "\n";
+                return false;
             }
-            else assert(tree.attributes.size() == 1);
 
             Expression* expr = tree.WHERE_ROOT.get();
             auto scannedResults = SCAN(manager.files.at(tableID), database.tables.at(tableID), tableID, logger, pager, expr);
