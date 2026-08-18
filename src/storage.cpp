@@ -378,11 +378,11 @@ bool AppendBeforeImage(Logger& logger, BeforeImage& before);
 bool flush_logger_header(std::fstream& file, LoggerHeader& header);
 
 std::optional<Page>
-load_page(std::fstream& file, const int id) {
+load_page(std::fstream& file, const int id, const size_t header_size) {
  
     Page page;
 
-    size_t pageOffset = sizeof(RecordHeader) + id * (sizeof(PageHeader) + PAGE_SIZE);
+    size_t pageOffset = header_size + id * (sizeof(PageHeader) + PAGE_SIZE);
     file.clear();
     file.seekg(pageOffset);
     file.read(reinterpret_cast<char*>(&page.header), sizeof(PageHeader));
@@ -412,10 +412,10 @@ load_page(std::fstream& file, const int id) {
     return page;
 }
 
-bool flush_page(std::fstream& file, const Page& page) {
+bool flush_page(std::fstream& file, const Page& page, size_t header_size) {
 
     file.clear();
-    int pageOffset = sizeof(RecordHeader) + page.header.id * (sizeof(PageHeader) + PAGE_SIZE);
+    int pageOffset = header_size + page.header.id * (sizeof(PageHeader) + PAGE_SIZE);
     file.seekp(pageOffset, std::ios::beg);
 
     file.write(reinterpret_cast<const char*>(&page.header), sizeof(PageHeader));
@@ -463,6 +463,18 @@ Page create_page(uint32_t id) {
     newPage.dirty = true;
     return newPage;
 }
+size_t ReturnHeaderSize(const Pager& pager) {
+    size_t size = 0;
+    switch(pager.type) {
+        case PagerType::RECORD:
+            size = sizeof(RecordHeader);
+            break;
+        case PagerType::INDEX:
+            size = sizeof(IndexHeader);
+            break;
+    }
+    return size;
+}
 
 bool evictPage(std::fstream& file, Pager& pager, Logger* logger = nullptr) {
     PageKey key = pager.PageFrequency.back();
@@ -491,7 +503,8 @@ bool evictPage(std::fstream& file, Pager& pager, Logger* logger = nullptr) {
             }
         }
         //std::cout << "flushing page: " << key.pageID << " When evicting\n";
-        if(!flush_page(file, *page)) {
+        size_t header_size = ReturnHeaderSize(pager);
+        if(!flush_page(file, *page, header_size)) {
             std::cerr << "Failed to flush page when evicting it\n";
             return false;
         }
@@ -514,11 +527,13 @@ bool will_fit(const Page& page, size_t rowSize) {
     return page.header.freespace + rowSize < PAGE_SIZE;
 };
 
+
 Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger) {
     Page* page = nullptr;
     auto it = pager.pages.find(ID);
     if (it == pager.pages.end()) {
-        auto loadedPage = load_page(file, ID.pageID);
+        size_t header_size = ReturnHeaderSize(pager);
+        auto loadedPage = load_page(file, ID.pageID, header_size);
         if(!loadedPage) {
             return page;
         }
@@ -1151,7 +1166,8 @@ bool REDO(const DataBase& database, FileManager& manager, uint32_t NumLogs, cons
             return false;
         }
 
-        if(!flush_page(manager.files.at(key.tableID), page)) {
+        size_t header_size = ReturnHeaderSize(pager);
+        if(!flush_page(manager.files.at(key.tableID), page, header_size)) {
             std::cerr << "failed to flush page: " << page.header.id << "\n";
             return false;
         };
@@ -1558,7 +1574,8 @@ bool COMMIT(DataBase& database, FileManager& manager, Logger* logger, Pager& pag
         if(!loadTableFile(manager, key.tableID, filePath)) {
             return false;
         }
-        if(!flush_page(manager.files.at(key.tableID), page)) {
+        size_t header_size = ReturnHeaderSize(pager);
+        if(!flush_page(manager.files.at(key.tableID), page, header_size)) {
             std::cerr << "failed to flush page: " << page.header.id << "\n";
             return false;
         };

@@ -138,14 +138,22 @@ struct PageKeyHash {
     }
 };
 
+enum class PagerType {
+    RECORD,
+    INDEX
+};
 struct Pager {
+    
+    PagerType type;
     std::unordered_map<uint32_t, RecordHeader> tableMetadata;
+    std::unordered_map<uint32_t, IndexHeader> indexMetadata;
     std::unordered_map<PageKey, Page, PageKeyHash> pages;
     
     std::unordered_map<PageKey, std::list<PageKey>::iterator, PageKeyHash> PFIterators;
     std::list<PageKey> PageFrequency;
 
-    Pager() {
+    Pager(PagerType t = PagerType::RECORD) {
+        type = t;
         pages.reserve(MAXPAGES);
     }
 };
@@ -302,8 +310,12 @@ void printRow(Row& row);
 
 bool loadTableFile(FileManager& manager, const Table& table);
 bool loadTableMetadata(FileManager& manager, Pager& pager, RecordHeader& globalRBHeader, const Table& table);
+
+void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset);
+void eraseRowFromBuff(std::vector<char>& buff, Row& row, size_t offset);
 Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger = nullptr);
 Page* requestPageWithSpace(std::fstream& file, Logger& logger, Pager& pager, const uint32_t tableID, Row& row);
+
 
 
 struct ScanResult {

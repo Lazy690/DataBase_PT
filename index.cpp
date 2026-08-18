@@ -8,6 +8,7 @@
 #include <variant>
 #include <span>
 #include <cstddef>
+#include <cstring>
 namespace fs = std::filesystem;
 
 #include "src/storage.hpp"
@@ -29,12 +30,19 @@ struct InternalEntry {
 };
 
 struct BTreeNode {
-    uint32_t page_id;
-    bool is_leaf;
+    uint32_t page_id = 0;
+    bool is_leaf = true;
     PageID next_leaf = 0;
 
     std::vector<InternalEntry> children;
     std::vector<LeafEntry> entries;
+};
+
+struct BPlusTree {
+    IndexHeader header;
+    PageID root;
+    Pager pager;
+    BPlusTree() {pager.type = PagerType::INDEX;}
 };
 
 //=============================
@@ -249,12 +257,12 @@ void printLeaf(const LeafEntry& leaf, DataType type) {
             break;
         case DataType::STRING:
         {
-            std::cout << "Key: " << std::get<int32_t>(leaf.key) << "\n";
+            std::cout << "Key: " << std::get<std::string>(leaf.key) << "\n";
         }
             break;
         case DataType::DOUBLE:
         {
-            std::cout << "Key: " << std::get<int32_t>(leaf.key) << "\n";
+            std::cout << "Key: " << std::get<double>(leaf.key) << "\n";
         }
             break;
     }
@@ -270,12 +278,12 @@ void printInternalEntry(const InternalEntry& entry, DataType type) {
             break;
         case DataType::STRING:
         {
-            std::cout << "Key: " << std::get<int32_t>(entry.key) << "\n";
+            std::cout << "Key: " << std::get<std::string>(entry.key) << "\n";
         }
             break;
         case DataType::DOUBLE:
         {
-            std::cout << "Key: " << std::get<int32_t>(entry.key) << "\n";
+            std::cout << "Key: " << std::get<double>(entry.key) << "\n";
         }
             break;
     }
@@ -303,15 +311,118 @@ void printNode(const BTreeNode& node, DataType type) {
     }
 }
 
+void overriteNodeIntoBuff(std::vector<char>& buff, const std::vector<char>& nodeBytes, const DataType type) {
+    buff = {};
+    buff.resize(PAGE_SIZE);
+    std::memcpy(buff.data(), nodeBytes.data(), nodeBytes.size());
+}
+void inserNoteIntoPage(const BTreeNode& node, Page& page, const DataType type) {
+    std::vector<char> bytes = serializeNode(node, type);
+    assert(page.header.freespace + bytes.size() <= PAGE_SIZE);
+    overriteNodeIntoBuff(page.buffer, bytes, type);
+    page.header.freespace + bytes.size();
+}
+
+size_t sorted_insert_position(const std::variant<int32_t, std::string, double>& key, const std::vector<LeafEntry>& buffer, const DataType& type) {
+    for(size_t i = 0; i < buffer.size(); i++) {
+        switch(type) {
+            case DataType::INT:
+            {
+                if(std::get<int32_t>(key) < std::get<int32_t>(buffer[i].key)) return i;
+                else if(std::get<int32_t>(key) == std::get<int32_t>(buffer[i].key)) {
+                    while(std::get<int32_t>(buffer[i].key) == std::get<int32_t>(key)) {
+                        if(i == buffer.size()) break;
+                        i++;
+                    }
+                    return i;
+                }
+            }
+                break;
+            case DataType::STRING:
+            {
+                if(std::get<std::string>(key) < std::get<std::string>(buffer[i].key)) return i;
+                else if(std::get<std::string>(key) == std::get<std::string>(buffer[i].key)) {
+                    while(std::get<std::string>(buffer[i].key) == std::get<std::string>(key)) {
+                        if(i == buffer.size()) break;
+                        i++;
+                    }
+                    return i;
+                }
+            }
+                break;
+            case DataType::DOUBLE:
+            {
+                if(std::get<double>(key) < std::get<double>(buffer[i].key)) return i;
+                else if(std::get<double>(key) == std::get<double>(buffer[i].key)) {
+                    while(std::get<double>(buffer[i].key) == std::get<double>(key)) {
+                        if(i == buffer.size()) break;
+                        i++;
+                    }
+                    return i;
+                }
+            }
+                break;
+        }
+    }
+    return buffer.size();
+}
+size_t sorted_insert_position(const std::variant<int32_t, std::string, double>& key, const std::vector<InternalEntry>& buffer, const DataType& type) {
+    for(size_t i = 0; i < buffer.size(); i++) {
+        switch(type) {
+            case DataType::INT:
+            {
+                //Temporary: evaluate cases of duplicate keys please
+                assert(std::get<int32_t>(key) != std::get<int32_t>(buffer[i].key));
+                if(std::get<int32_t>(key) < std::get<int32_t>(buffer[i].key)) return i;
+            }
+                break;
+            case DataType::STRING:
+            {
+                assert(std::get<std::string>(key) != std::get<std::string>(buffer[i].key));
+                if(std::get<std::string>(key) < std::get<std::string>(buffer[i].key)) return i;
+            }
+                break;
+            case DataType::DOUBLE:
+            {
+                assert(std::get<double>(key) != std::get<double>(buffer[i].key));
+                if(std::get<double>(key) < std::get<double>(buffer[i].key)) return i;
+            }
+                break;
+        }
+    }
+    return buffer.size();
+}
+
+void insert_into_leaf(BTreeNode& node, const LeafEntry& entry, const DataType type) {
+    assert(node.is_leaf);
+    auto insert_pos = node.entries.begin();
+    insert_pos += sorted_insert_position(entry.key, node.entries, type);
+    node.entries.insert(insert_pos, entry);
+}
+void insert_into_internal(BTreeNode& node, const InternalEntry& child, const DataType type) {
+    std::cout << "internal\n";  
+    assert(!node.is_leaf);
+    auto insert_pos = node.children.begin();
+    insert_pos += sorted_insert_position(child.key, node.children, type);
+    node.children.insert(insert_pos, child);
+}
+
 int main() {
 
-    const auto type = DataType::INT;
+    const auto type = DataType::STRING;
 
     BTreeNode node;
     node.page_id = FIRST_PAGE_ID;
     node.is_leaf = false;
-    node.children = {{10, 101}, {20, 102}, {30, 103}};
     
+    insert_into_internal(node, {"g", 100}, type);
+    insert_into_internal(node, {"b", 100}, type);
+    insert_into_internal(node, {"e", 100}, type);
+    insert_into_internal(node, {"a", 100}, type);
+    insert_into_internal(node, {"c", 101}, type);
+    insert_into_internal(node, {"d", 102}, type);
+    std::cout << "Children: " << node.children.size() << "\n";
+
     std::vector<char> buffer = serializeNode(node, type);
     uint32_t NumEntry = node.children.size();
     node = {};
@@ -321,3 +432,4 @@ int main() {
     std::cout << "Compiles!\n";
     return 0;
 }
+
