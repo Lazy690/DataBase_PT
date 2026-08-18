@@ -26,31 +26,6 @@
 // Type Declaration and Template Section
 //===================================
 
-//template declaractions
-
-template<typename T>
-std::optional<T> 
-read_bytes(std::span<const char> buff, std::size_t& index, std::optional<uint32_t> str_len = std::nullopt) {
-
-    if constexpr (std::is_same_v<T, std::string>) {
-        if(str_len == std::nullopt) return std::nullopt;
-        if(index + *str_len > buff.size()) return std::nullopt;
-        T value;
-        value.resize(*str_len);
-        std::memcpy(value.data(), buff.data() + index, *str_len);
-        index += *str_len;
-        return value;
-    } else {
-        if(index + sizeof(T) > buff.size()) {
-            std::cout << index + sizeof(T) << "/" << buff.size() << "\n";
-            return std::nullopt;
-        }
-        T value;
-        std::memcpy(&value, buff.data() + index, sizeof(T));
-        index += sizeof(T);
-        return value;
-    }
-}
 //===================================
 // File Section
 //===================================
