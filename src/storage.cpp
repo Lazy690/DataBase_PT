@@ -533,7 +533,9 @@ Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger) 
     auto it = pager.pages.find(ID);
     if (it == pager.pages.end()) {
         size_t header_size = ReturnHeaderSize(pager);
-        auto loadedPage = load_page(file, ID.pageID, header_size);
+        uint32_t pageID = ID.pageID;
+        if(pager.type == PagerType::INDEX) pageID - 100;
+        auto loadedPage = load_page(file, pageID, header_size);
         if(!loadedPage) {
             return page;
         }

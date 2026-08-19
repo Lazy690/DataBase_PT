@@ -311,8 +311,6 @@ void printRow(Row& row);
 bool loadTableFile(FileManager& manager, const Table& table);
 bool loadTableMetadata(FileManager& manager, Pager& pager, RecordHeader& globalRBHeader, const Table& table);
 
-void insertRowIntoBuff(std::vector<char>& buff, Row& row, size_t offset);
-void eraseRowFromBuff(std::vector<char>& buff, Row& row, size_t offset);
 Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger = nullptr);
 Page* requestPageWithSpace(std::fstream& file, Logger& logger, Pager& pager, const uint32_t tableID, Row& row);
 
