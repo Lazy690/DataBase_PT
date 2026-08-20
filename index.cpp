@@ -241,7 +241,7 @@ BTreeNode deserializeNode(const std::span<const char> bytes, const DataType type
 
             node.entries.push_back(deserializeLeafEntry(bytes_range, type, size));
             cursor += size;
-            std::cout << "size : " << size << "\n";
+            //std::cout << "size : " << size << "\n";
         }
     }
     else {
@@ -414,12 +414,42 @@ size_t sorted_insert_position(const std::variant<int32_t, std::string, double>& 
     }
     return buffer.size();
 }
+std::optional<size_t> find_leaf_entry_position(const var key, const std::vector<LeafEntry> buffer, const DataType type) {
+    for(size_t i = 0; i < buffer.size(); i++) {
+        switch(type) {
+            case DataType::INT:
+            {
+                if(std::get<int32_t>(key) == std::get<int32_t>(buffer[i].key)) return i;
+            }
+                break;
+            case DataType::STRING:
+            {
+                if(std::get<std::string>(key) == std::get<std::string>(buffer[i].key)) return i;
+            }
+                break;
+            case DataType::DOUBLE:
+            {
+                if(std::get<double>(key) == std::get<double>(buffer[i].key)) return i;
+            }
+                break;
+        }
+    }
+    return std::nullopt;
+}
 
 void insert_into_leaf(BTreeNode& node, const LeafEntry& entry, const DataType type) {
     assert(node.is_leaf);
     auto insert_pos = node.entries.begin();
     insert_pos += sorted_insert_position(entry.key, node.entries, type);
     node.entries.insert(insert_pos, entry);
+}
+void delete_from_leaf(BTreeNode& node, const LeafEntry& entry, const DataType type) {
+    assert(node.is_leaf);
+    auto it = node.entries.begin();
+    auto delete_pos = find_leaf_entry_position(entry.key, node.entries, type); 
+    if(!delete_pos) return;
+    it += *delete_pos;
+    node.entries.erase(it);
 }
 void insert_into_internal(BTreeNode& node, const InternalEntry& child, const DataType type) {
     assert(!node.is_leaf);
@@ -474,14 +504,14 @@ struct TraverseResult {
 TraverseResult Traverse(std::fstream& file, const var& key, const PageID id, Pager& pager, const DataType type, int it) {
     TraverseResult result;
 
-    std::cout << "iteration: " << ++it << "\n";
+    //std::cout << "iteration: " << ++it << "\n";
     Page* nodePage = requestPage(file, pager, {fileID, id});
     BTreeNode node = deserializeNode(nodePage->buffer, type, nodePage->header.NumRows);
-    printNode(node, type);
-    std::cout << "----------\n";
+    //printNode(node, type);
+    //std::cout << "----------\n";
     if(!node.is_leaf) {
         PageID next_child = FindNextChild(node, key, type);
-        std::cout << "next child >> " << next_child<< "\n";
+        //std::cout << "next child >> " << next_child<< "\n";
         result = Traverse(file, key, next_child, pager, type, it);
     }
     else {
@@ -492,11 +522,22 @@ TraverseResult Traverse(std::fstream& file, const var& key, const PageID id, Pag
 
 void INSERT_INTO_LEAF(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
     DataType type = tree.header.Type;
-    std::cout << "Inserting: " << std::get<int32_t>(entry.key) << "\n";
+    //std::cout << "Inserting: " << std::get<int32_t>(entry.key) << "\n";
     int it = 0;
     TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, type, it);
     assert(result.node.is_leaf);
     insert_into_leaf(result.node, entry, type);
+
+    Page* page = requestPage(file, tree.pager, {fileID, result.page_id});
+    insertNodeIntoPage(result.node, *page, type);
+}
+void DELETE_FROM_LEAF(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
+    DataType type = tree.header.Type;
+    //std::cout << "Deleting: " << std::get<int32_t>(entry.key) << "\n";
+    int it = 0;
+    TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, type, it);
+    assert(result.node.is_leaf);
+    delete_from_leaf(result.node, entry, type);
 
     Page* page = requestPage(file, tree.pager, {fileID, result.page_id});
     insertNodeIntoPage(result.node, *page, type);
@@ -563,9 +604,10 @@ int main() {
     INSERT_INTO_LEAF(file, {100, 104, 0}, tree);
     INSERT_INTO_LEAF(file, {60, 104, 364}, tree);
     INSERT_INTO_LEAF(file, {80, 104, 635}, tree);
+    DELETE_FROM_LEAF(file, {80, 104, 635}, tree);
 
-    TraverseResult result = Traverse(file, 30, tree.root, tree.pager, type, 0);
-    std::cout << "Page ID: " << result.page_id << "\n";
+    TraverseResult result = Traverse(file, 60, tree.root, tree.pager, type, 0);
+    std::cout << "-----RESULT-----" << "\n";
     printNode(result.node, type);
 
     std::cout << "Compiles!\n\n";
