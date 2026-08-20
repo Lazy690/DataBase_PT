@@ -78,9 +78,11 @@ bool EVALUATE_COMPARISON(ComparisonNode comparison, const std::unordered_map<col
             }
             break;
         case DataType::DOUBLE:
+            /*
             std::cout << "Val from row: " << std::get<double>(entry_to_compare->value);
             std::cout << " " << comparison.comparator.value;
             std::cout << " Val from imput: " << comparison.value.value << "\n";
+            */
             {
             bool result = compare(std::get<double>(entry_to_compare->value), condition, std::stod(comparison.value.value));
             return result;
