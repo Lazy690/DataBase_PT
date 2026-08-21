@@ -38,7 +38,6 @@ struct BTreeNode {
     uint32_t page_id = 0;
     bool is_leaf = true;
     PageID next_leaf = 0;
-    PageID prev_leaf = 0;
 
     std::vector<InternalEntry> children;
     std::vector<LeafEntry> entries;
@@ -197,7 +196,7 @@ std::vector<char> serializeNode(const BTreeNode& node, const DataType type) {
     uint8_t is_leaf = node.is_leaf ? 1 : 0;
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&is_leaf), reinterpret_cast<const char*>(&is_leaf) + sizeof(is_leaf));
     bytes.insert(bytes.end(), reinterpret_cast<const char*>(&node.next_leaf), reinterpret_cast<const char*>(&node.next_leaf) + sizeof(node.next_leaf));
-    bytes.insert(bytes.end(), reinterpret_cast<const char*>(&node.prev_leaf), reinterpret_cast<const char*>(&node.prev_leaf) + sizeof(node.prev_leaf));
+    //bytes.insert(bytes.end(), reinterpret_cast<const char*>(&node.prev_leaf), reinterpret_cast<const char*>(&node.prev_leaf) + sizeof(node.prev_leaf));
 
     if(node.is_leaf) {
         assert(node.children.empty());
@@ -234,9 +233,11 @@ BTreeNode deserializeNode(const std::span<const char> bytes, const DataType type
     assert(next_leaf);
     node.next_leaf = *next_leaf;
 
+    /*
     auto prev_leaf = read_bytes<uint32_t>(bytes, index);
     assert(prev_leaf);
     node.prev_leaf = *prev_leaf;
+    */
 
     auto cursor = bytes.begin() + index;
     if (node.is_leaf) {
@@ -251,7 +252,7 @@ BTreeNode deserializeNode(const std::span<const char> bytes, const DataType type
         }
     }
     else {
-        assert(node.next_leaf == 0 && node.prev_leaf == 0);
+        //assert(node.next_leaf == 0 && node.prev_leaf == 0);
         node.children.reserve(NumEntry);
         for (int i = 0; i < NumEntry; i++) {
             size_t size = 0;
@@ -316,7 +317,7 @@ void printNode(const BTreeNode& node, DataType type) {
     std::cout << leaf_status;
     
     if(node.next_leaf != 0) std::cout << "Next Leaf: " << node.next_leaf << "\n";
-    if(node.prev_leaf != 0) std::cout << "prev Leaf: " << node.prev_leaf << "\n";
+    //if(node.prev_leaf != 0) std::cout << "prev Leaf: " << node.prev_leaf << "\n";
 
     if(node.is_leaf) {
         for (auto entry : node.entries) {
@@ -330,6 +331,41 @@ void printNode(const BTreeNode& node, DataType type) {
     }
 }
 
+void printTree(std::fstream& file, BPlusTree& tree) {
+    DataType type = tree.header.Type;
+
+    Page* rootp = requestPage(file, tree.pager, {fileID, tree.root});
+    assert(rootp);
+    BTreeNode root = deserializeNode(rootp->buffer, type, rootp->header.NumRows);
+
+    if(root.is_leaf) {
+        printNode(root, type);
+        return;
+    }
+
+    std::cout << "----ROOT----\n";
+    printNode(root, type);
+    std::cout << "------------\n";
+
+    size_t i = 1;
+    for (auto& internal : root.children) {
+        std::cout << "EInternal entry: " << i << "\n";
+        Page* leftP = requestPage(file, tree.pager, {fileID, internal.left_child});
+        assert(leftP);
+        Page* rightP = requestPage(file, tree.pager, {fileID, internal.right_child});
+        assert(rightP);
+
+        BTreeNode left  = deserializeNode(leftP->buffer, type, leftP->header.NumRows);
+        BTreeNode right = deserializeNode(rightP->buffer, type, rightP->header.NumRows);
+        std::cout << "----Leafes----\n";
+        std::cout << "<< LEFT\n";
+        printNode(left, type);
+        std::cout << ">> RIGHT\n";
+        printNode(right, type);
+        std::cout << "--------------\n";
+        i++;
+    }
+}
 void overriteNodeIntoBuff(std::vector<char>& buff, const std::vector<char>& nodeBytes, const DataType type) {
     buff = {};
     buff.resize(PAGE_SIZE);
@@ -505,9 +541,16 @@ PageID FindNextChild(const BTreeNode& node, const var& key, const DataType type)
             case DataType::INT:
             {
                 if(std::get<int32_t>(key) < std::get<int32_t>(child.key)) {
+                    std::cout << "key: " << std::get<int32_t>(key) << " is lesser then " << std::get<int32_t>(child.key) << "\n";
+                    std::cout << "Returning left pointer\n";
                     return child.left_child;
                 }
-                if(std::get<int32_t>(key) >= std::get<int32_t>(child.key)) {
+                if(std::get<int32_t>(key) >= std::get<int32_t>(child.key) &&
+                   index == node.children.size()) {
+                    std::cout << "key: " << std::get<int32_t>(key) << " is greater or equal to " << std::get<int32_t>(child.key) << "\n";
+                    std::cout << "Returning right pointer: page " << child.right_child << "\n";
+                    std::cout << "----internal entry----\n";
+                    printInternalEntry(child, type);
                     return child.right_child;
                 }
             }
@@ -532,25 +575,51 @@ PageID FindNextChild(const BTreeNode& node, const var& key, const DataType type)
     }
     return 0;
 }
+PageID FindLeftMostChild(const BTreeNode& node, const DataType type) {
+    assert(!node.is_leaf);
+    assert(!node.children.empty());
+    size_t index = 0;
+    return node.children.front().left_child;
+}
 
 struct TraverseResult {
     PageID page_id = 0;
     BTreeNode node;
 };
+struct TraversalHistory {
+    std::vector<PageID> nodes;
+};
 
-TraverseResult Traverse(std::fstream& file, const var& key, const PageID id, Pager& pager, const DataType type, int it) {
+TraverseResult Traverse(std::fstream& file, const var& key, const PageID id, Pager& pager, TraversalHistory& history,const DataType type, int it) {
     TraverseResult result;
 
     //std::cout << "iteration: " << ++it << "\n";
     Page* nodePage = requestPage(file, pager, {fileID, id});
     assert(nodePage);
+    history.nodes.push_back(id);
     BTreeNode node = deserializeNode(nodePage->buffer, type, nodePage->header.NumRows);
     //printNode(node, type);
     //std::cout << "----------\n";
     if(!node.is_leaf) {
         PageID next_child = FindNextChild(node, key, type);
         //std::cout << "next child >> " << next_child<< "\n";
-        result = Traverse(file, key, next_child, pager, type, it);
+        result = Traverse(file, key, next_child, pager, history, type, it);
+    }
+    else {
+        result = {id, node};
+    }
+        return result;
+}
+TraverseResult Traverse_leftmost_leaf(std::fstream& file, const PageID id, Pager& pager, TraversalHistory& history, const DataType type, int it) {
+    TraverseResult result;
+
+    Page* nodePage = requestPage(file, pager, {fileID, id});
+    assert(nodePage);
+    history.nodes.push_back(id);
+    BTreeNode node = deserializeNode(nodePage->buffer, type, nodePage->header.NumRows);
+    if(!node.is_leaf) {
+        PageID left_most_child = FindLeftMostChild(node, type);
+        result = Traverse_leftmost_leaf(file, left_most_child, pager, history, type, it);
     }
     else {
         result = {id, node};
@@ -558,23 +627,146 @@ TraverseResult Traverse(std::fstream& file, const var& key, const PageID id, Pag
         return result;
 }
 
+bool will_fit(std::vector<char> nodeBytes) { 
+    //Temporary
+    //return nodeBytes.size() <= PAGE_SIZE;
+    return nodeBytes.size() <= 3;
+}
+bool will_fit(const size_t size) {
+    return size <= 3;
+}
+
+bool is_same_var(var a, var b, DataType type) {
+    switch(type) {
+        case DataType::INT:
+            return std::get<int32_t>(a) == std::get<int32_t>(b);
+            break;
+        case DataType::STRING:
+            return std::get<std::string>(a) == std::get<std::string>(b);
+            break;
+        case DataType::DOUBLE:
+            return std::get<double>(a) == std::get<double>(b);
+            break;
+    }
+    return false;
+}
+
+std::optional<size_t> FindNextInternalEntry(const BTreeNode& node, const var key, DataType type) {
+    assert(!node.is_leaf);
+    //size_t i = 0;
+    if(is_same_var(node.children.back().key, key, type)) return std::nullopt;
+    for (size_t i = 0; i < node.children.size(); i++) {
+        if (is_same_var(node.children[i].key, key, type)) return ++i;
+    }
+    return std::nullopt;
+}
+
+void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, uint32_t& latest_page_id, const DataType type) {
+    if(node.is_leaf) {
+        assert(node.children.empty());
+
+        std::vector<LeafEntry> copy = node.entries;
+        auto split_pos = copy.begin() + static_cast<uint64_t>(copy.size() / 2); 
+        auto beg = copy.begin();
+        auto end = copy.end();
+
+        InternalEntry pivot_entry;
+        pivot_entry.key = split_pos->key;
+        std::vector<LeafEntry> left_entries  = {beg, split_pos};
+        std::vector<LeafEntry> right_entries = {split_pos, end};
+
+        BTreeNode& left_node = node;
+        BTreeNode right_node;
+
+        right_node.page_id = ++latest_page_id;
+        right_node.next_leaf = left_node.page_id;
+        
+        right_node.entries = right_entries;
+        left_node.entries = {};
+        left_node.entries = left_entries;
+
+        PageID parentID = 0;
+        if (history.nodes.size() == 1) {
+            //create new root
+        }
+        else {
+            //temporaty please improve
+            parentID = history.nodes[history.nodes.size() - 2];
+        }
+
+        Page* parentPage = requestPage(file, pager, {fileID, parentID});
+        BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
+
+        /*
+        std::cout << "History: ";
+        for (auto& id : history.nodes) {
+            std::cout << " << ";
+            std::cout << " " << id;
+        }
+        std::cout << "\n";
+        std::cout << "Parent-----\n";
+        printNode(parent, type);
+        */
+
+        pivot_entry.left_child  = left_node.page_id;
+        pivot_entry.right_child = right_node.page_id;
+        std::cout << "promoting: " << std::get<int32_t>(pivot_entry.key) << "\n";
+        insert_into_internal(parent, pivot_entry, type);
+
+        if(!will_fit(parent.children.size())) {
+            //kill me
+        }
+
+        auto next_internal_entry_pos = FindNextInternalEntry(parent, pivot_entry.key, type);
+        if(next_internal_entry_pos) {
+            std::cout << "next internal: " << std::get<int32_t>(parent.children[*next_internal_entry_pos].key) << "\n"; 
+            parent.children[*next_internal_entry_pos].left_child = right_node.page_id;
+            std::cout << "set left child to page " << parent.children[*next_internal_entry_pos].left_child << "\n";
+            std::cout << "right child is page " << parent.children[*next_internal_entry_pos].right_child << "\n";
+        }
+
+        Page right_page = create_page(right_node.page_id);
+        Page* left_page = requestPage(file, pager, {fileID, left_node.page_id});
+        std::cout << "New right nodes page id: " << right_node.page_id << "\n";
+        insertNodeIntoPage(parent, *parentPage, type);
+        insertNodeIntoPage(right_node, right_page, type);
+        insertNodeIntoPage(left_node, *left_page, type);
+        pager.pages.insert({{fileID, right_node.page_id}, right_page});
+    }
+}
 void INSERT_INTO_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
     DataType type = tree.header.Type;
+    TraversalHistory history;
     //std::cout << "Inserting: " << std::get<int32_t>(entry.key) << "\n";
     int it = 0;
-    TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, type, it);
+    TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, history, type, it);
     assert(result.node.is_leaf);
     insert_into_leaf(result.node, entry, type);
 
     Page* page = requestPage(file, tree.pager, {fileID, result.page_id});
     assert(page);
-    insertNodeIntoPage(result.node, *page, type);
+
+    std::vector<char> nodeBytes = serializeNode(result.node, type);
+    if (!will_fit(result.node.entries.size())) {
+        std::cout << "----------------\n";
+        std::cout << "Num entries in node: " << result.node.entries.size() << "\n";
+        std::cout << "Spliting while inserting key: " << std::get<int32_t>(entry.key) << "\n";
+        printNode(result.node, type);
+        SPLIT(file, result.node, tree.pager, history, tree.header.LatestPageID, type);
+        std::cout << "----------------\n";
+        std::cout << "inserting: " << std::get<int32_t>(entry.key) << " into page " << tree.header.LatestPageID << "\n";
+    }
+    else {
+        std::cout << "inserting: " << std::get<int32_t>(entry.key) << " into page " << page->header.id << "\n";
+        insertNodeIntoPage(result.node, *page, type);
+    }
 }
 void DELETE_FROM_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
     DataType type = tree.header.Type;
+    TraversalHistory history;
     //std::cout << "Deleting: " << std::get<int32_t>(entry.key) << "\n";
     int it = 0;
-    TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, type, it);
+    TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, history,  type, it);
     assert(result.node.is_leaf);
     delete_from_leaf(result.node, entry, type);
 
@@ -588,8 +780,9 @@ void UPDATE_FROM_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tre
 }
 std::vector<LeafEntry> SELECT_FROM_TREE(std::fstream& file, BPlusTree& tree, const Conditional conditional, const var key) {
     std::vector<LeafEntry> results;
+    TraversalHistory history;
     int it = 0;
-    TraverseResult traverse_result = Traverse(file, key, tree.root, tree.pager, tree.header.Type, it);
+    TraverseResult traverse_result = Traverse(file, key, tree.root, tree.pager, history,  tree.header.Type, it);
     assert(traverse_result.node.is_leaf);
 
     auto leaf_select = select_from_leaf(traverse_result.node, conditional, key, tree.header.Type);
@@ -609,14 +802,18 @@ std::vector<LeafEntry> SELECT_FROM_TREE(std::fstream& file, BPlusTree& tree, con
     }
     else if((conditional == Conditional::LESSER || 
         conditional == Conditional::LESSERorEQUAL)) {
-        while(node.prev_leaf != 0) {
-            Page* page = requestPage(file, tree.pager, {fileID, node.prev_leaf});
+        
+        TraverseResult left_child = Traverse_leftmost_leaf(file, tree.root, tree.pager, history, tree.header.Type, it);
+        if(left_child.page_id == node.page_id) return results;
+        node.next_leaf = left_child.page_id;
+        do {
+            Page* page = requestPage(file, tree.pager, {fileID, node.next_leaf});
             assert(page);
             node = {};
             node = deserializeNode(page->buffer, tree.header.Type, page->header.NumRows);
             auto returned_leafs = select_from_leaf(node, conditional, key, tree.header.Type);
-            results.insert(results.end(), returned_leafs.begin(), returned_leafs.end());
-        }
+            results.insert(results.begin(), returned_leafs.begin(), returned_leafs.end());
+        } while(node.next_leaf != traverse_result.page_id);
     }
     return results;
 }
@@ -654,7 +851,7 @@ int main() {
     BTreeNode right;
     right.page_id = 102;
     right.is_leaf = true;
-    right.prev_leaf = 101;
+    //right.prev_leaf = 101;
 
     Page root_page;
     root_page.header.id = FIRST_PAGE_ID;
@@ -674,21 +871,31 @@ int main() {
     tree.pager.pages.insert({{fileID, 100}, root_page});
     tree.pager.pages.insert({{fileID, 101}, left_page});
     tree.pager.pages.insert({{fileID, 102}, right_page});
+    tree.header.LatestPageID = 102;
 
     std::fstream file;
     INSERT_INTO_TREE(file, {30, 100, 345}, tree);
     INSERT_INTO_TREE(file, {10, 100, 364}, tree);
     INSERT_INTO_TREE(file, {20, 103, 68}, tree);
+    INSERT_INTO_TREE(file, {40, 104, 635}, tree);
 
     INSERT_INTO_TREE(file, {100, 104, 0}, tree);
     INSERT_INTO_TREE(file, {60, 104, 364}, tree);
     INSERT_INTO_TREE(file, {80, 104, 635}, tree);
 
-    std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::LESSERorEQUAL, 100);
+    std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 40);
     std::cout << "-----RESULT-----" << "\n";
-    for (auto result: results) {
-        printLeaf(result, type);
+    if(results.empty()) std::cout << "No entries found\n";
+    else {
+        for (auto result: results) {
+            printLeaf(result, type);
+        }
     }
+  
+    /*
+    std::cout << "---TREE---\n";
+    printTree(file, tree);
+    */
 
     std::cout << "Compiles!\n\n";
     return 0;

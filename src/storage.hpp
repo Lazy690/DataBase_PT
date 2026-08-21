@@ -313,6 +313,7 @@ bool loadTableMetadata(FileManager& manager, Pager& pager, RecordHeader& globalR
 
 Page* requestPage(std::fstream& file, Pager& pager, PageKey ID, Logger* logger = nullptr);
 Page* requestPageWithSpace(std::fstream& file, Logger& logger, Pager& pager, const uint32_t tableID, Row& row);
+Page create_page(uint32_t id);
 
 
 

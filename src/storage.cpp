@@ -388,7 +388,7 @@ load_page(std::fstream& file, const int id, const size_t header_size) {
     file.read(reinterpret_cast<char*>(&page.header), sizeof(PageHeader));
 
     if(!file) {
-        std::cerr << "Failed to load page header" << std::endl;
+        std::cerr << "Failed to load header for page: " << id << std::endl;
         std::cout << "Cursor: " << file.tellg() << "\n";
         return std::nullopt;
     }

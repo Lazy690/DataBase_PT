@@ -36,11 +36,12 @@ struct RecordHeader {
 };
 
 struct IndexHeader {
-    uint32_t MAGIC     = 0;
-    uint32_t VERSION   = 0;
-    uint32_t ColumnID  = 0;
-    uint32_t TableId   = 0;
-    uint32_t PageCount = 0;
+    uint32_t MAGIC        = 0;
+    uint32_t VERSION      = 0;
+    uint32_t ColumnID     = 0;
+    uint32_t TableId      = 0;
+    uint32_t PageCount    = 0;
+    uint32_t LatestPageID = 0;
     DataType Type;
 };
 
