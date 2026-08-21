@@ -679,7 +679,6 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         BTreeNode right_node;
 
         right_node.page_id = ++latest_page_id;
-        right_node.next_leaf = left_node.page_id;
         
         right_node.entries = right_entries;
         left_node.entries = {};
@@ -723,7 +722,9 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
             parent.children[*next_internal_entry_pos].left_child = right_node.page_id;
             std::cout << "set left child to page " << parent.children[*next_internal_entry_pos].left_child << "\n";
             std::cout << "right child is page " << parent.children[*next_internal_entry_pos].right_child << "\n";
+            right_node.next_leaf = parent.children[*next_internal_entry_pos].right_child;
         }
+        left_node.next_leaf = right_node.page_id;
 
         Page right_page = create_page(right_node.page_id);
         Page* left_page = requestPage(file, pager, {fileID, left_node.page_id});
@@ -883,7 +884,7 @@ int main() {
     INSERT_INTO_TREE(file, {60, 104, 364}, tree);
     INSERT_INTO_TREE(file, {80, 104, 635}, tree);
 
-    std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 40);
+    std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::LESSERorEQUAL, 100);
     std::cout << "-----RESULT-----" << "\n";
     if(results.empty()) std::cout << "No entries found\n";
     else {
@@ -892,10 +893,8 @@ int main() {
         }
     }
   
-    /*
     std::cout << "---TREE---\n";
     printTree(file, tree);
-    */
 
     std::cout << "Compiles!\n\n";
     return 0;
