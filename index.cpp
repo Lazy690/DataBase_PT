@@ -18,6 +18,7 @@ namespace fs = std::filesystem;
 
 const uint32_t FIRST_PAGE_ID = 100;
 const uint32_t ROOT = FIRST_PAGE_ID;
+
 //Temporary
 const uint32_t fileID = 1;
 using PageID = uint32_t;
@@ -442,6 +443,7 @@ size_t sorted_insert_position(const std::variant<int32_t, std::string, double>& 
             case DataType::INT:
             {
                 //Temporary: evaluate cases of duplicate keys please
+                std::cout << "Soriting values: " << std::get<int32_t>(key) << " and " << std::get<int32_t>(buffer[i].key) << "\n";
                 assert(std::get<int32_t>(key) != std::get<int32_t>(buffer[i].key));
                 if(std::get<int32_t>(key) < std::get<int32_t>(buffer[i].key)) return i;
             }
@@ -640,6 +642,15 @@ bool will_fit(std::vector<char> nodeBytes) {
 bool will_fit(const size_t size) {
     return size <= 3;
 }
+bool is_underfull(const size_t size) {
+    return size < 2;
+}
+bool is_at_minimum(const size_t size) {
+    return size == 2;
+}
+bool is_above_minimum(const size_t size) {
+    return size > 2;
+}
 
 bool is_same_var(var a, var b, DataType type) {
     switch(type) {
@@ -675,17 +686,39 @@ std::optional<size_t> FindPrevInternalEntry(const BTreeNode& node, const var key
     return std::nullopt;
 }
 
-Page* MakeNewRoot(std::fstream& file, BTreeNode& left, const BTreeNode& right, Pager& pager, uint32_t& latest_page_id) {
+Page* MakeNewRoot(std::fstream& file, BTreeNode& left, const BTreeNode& right, Pager& pager, uint32_t& latest_page_id, DataType type) {
     BTreeNode root;
     root.page_id = 100;
     root.is_leaf = false;
     left.page_id = ++latest_page_id;
     Page root_page = create_page(ROOT);
+    insertNodeIntoPage(root, root_page, type);
     pager.pages.erase({fileID, ROOT});
     pager.pages.insert({{fileID, ROOT}, root_page});
     return requestPage(file, pager, {fileID, ROOT});
 }
 
+void Update_frontNback_entry_pointers(BTreeNode& parent, const InternalEntry& pivot, DataType type) {
+    assert(!parent.is_leaf);
+
+    auto next_internal_entry_pos = FindNextInternalEntry(parent, pivot.key, type);
+    
+    if(next_internal_entry_pos) {
+        //std::cout << "next internal: " << std::get<int32_t>(parent.children[*next_internal_entry_pos].key) << "\n"; 
+        parent.children[*next_internal_entry_pos].left_child = pivot.right_child;
+        //std::cout << "set left child to page " << parent.children[*next_internal_entry_pos].left_child << "\n";
+        //std::cout << "right child is page " << parent.children[*next_internal_entry_pos].right_child << "\n";
+    }
+
+    auto prev_internal_entry_pos = FindPrevInternalEntry(parent, pivot.key, type);
+    
+    if(prev_internal_entry_pos) {
+        //std::cout << "prev internal: " << std::get<int32_t>(parent.children[*prev_internal_entry_pos].key) << "\n"; 
+        parent.children[*prev_internal_entry_pos].right_child = pivot.left_child;
+        //std::cout << "set left child to page " << parent.children[*prev_internal_entry_pos].left_child << "\n";
+        //std::cout << "right child is page " << parent.children[*prev_internal_entry_pos].right_child << "\n";
+    }
+}
 void Update_frontNback_entry_pointers(BTreeNode& parent, const InternalEntry& pivot, BTreeNode& right_node, DataType type) {
     assert(!parent.is_leaf);
 
@@ -736,7 +769,7 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         PageID parentID = 0;
 
         if(left_node.page_id == ROOT) {
-            parentPage = MakeNewRoot(file, left_node, right_node, pager, latest_page_id);
+            parentPage = MakeNewRoot(file, left_node, right_node, pager, latest_page_id, type);
             parentID == ROOT;
         }
         else {
@@ -778,9 +811,276 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         return;
     }
     else {
-          
+        std::cout << "Splitting an internal node now\n";
+        assert(node.entries.empty());
+
+        std::vector<InternalEntry> copy = node.children;
+        auto split_pos = copy.begin() + static_cast<uint64_t>(copy.size() / 2); 
+        auto beg = copy.begin();
+        auto end = copy.end();
+
+        InternalEntry pivot_entry;
+        pivot_entry.key = split_pos->key;
+        std::vector<InternalEntry> left_chilren   = {beg, split_pos};
+        std::vector<InternalEntry> right_children = {split_pos, end};
+
+        BTreeNode& left_node = node;
+        left_node.is_leaf = false;
+        BTreeNode  right_node;
+        right_node.is_leaf = false;
+
+        right_node.page_id = ++latest_page_id;
+
+        right_node.children = right_children;
+        left_node.children  = {};
+        left_node.children  = left_chilren;
+
+        Page* parentPage = nullptr;
+        PageID parentID = 0;
+
+        if(left_node.page_id == ROOT) {
+            std::cout << "Creating new root when splitting internal node\n";
+            parentPage = MakeNewRoot(file, left_node, right_node, pager, latest_page_id, type);
+            parentID == ROOT;
+        }
+        else {
+            assert(history.nodes.size() > 1);
+            size_t prev_node = 0;
+            for(size_t i = history.nodes.size(); --i > 0;) {
+                if(history.nodes[i] == node.page_id) {
+                    prev_node = --i;
+                    break;
+                }
+            }
+            //assert(prev_node != 0);
+            parentID = history.nodes[prev_node];
+            parentPage = requestPage(file, pager, {fileID, parentID});
+        }
+        assert(parentPage);
+
+        BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
+
+        pivot_entry.left_child  = left_node.page_id;
+        pivot_entry.right_child = right_node.page_id;
+        insert_into_internal(parent, pivot_entry, type);
+
+        Update_frontNback_entry_pointers(parent, pivot_entry, type);
+
+        Page right_page = create_page(right_node.page_id);
+        Page* left_page = requestPage(file, pager, {fileID, left_node.page_id});
+        if (!left_page) {
+           Page new_page = create_page(left_node.page_id);
+           pager.pages.insert({{fileID, left_node.page_id}, new_page});
+           left_page = requestPage(file, pager, {fileID, left_node.page_id});
+        }
+        insertNodeIntoPage(parent, *parentPage, type);
+        insertNodeIntoPage(right_node, right_page, type);
+        insertNodeIntoPage(left_node, *left_page, type);
+        pager.pages.insert({{fileID, right_node.page_id}, right_page});
+        pager.pages.insert({{fileID, left_node.page_id}, *left_page});
+
+        if(!will_fit(parent.children.size())) { 
+            SPLIT(file, parent, pager, history, latest_page_id, type);
+        }
+        return;
     }
 }
+
+void MERGE(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, uint32_t& latest_page_id, const DataType type) {
+
+}
+
+enum class BorrowDirection {
+    RIGHT,
+    LEFT
+};
+void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, BTreeNode& parent, 
+            Pager& pager, const BorrowDirection direction, const DataType type) {
+
+    assert(!parent.is_leaf);
+    if(recieverNode.is_leaf) {
+        assert(giverNode.is_leaf);
+        switch(direction) {
+            case BorrowDirection::RIGHT:
+            {
+                LeafEntry borrowed_entry = giverNode.entries.front();
+                recieverNode.entries.push_back(borrowed_entry);
+
+                InternalEntry* middle_entry = nullptr;
+                for(auto& entry : parent.children) {
+                    if(is_same_var(borrowed_entry.key, entry.key, type)) {
+                        middle_entry = &entry;
+                        break;
+                    }
+                }
+                assert(middle_entry);
+
+                giverNode.entries.erase(giverNode.entries.begin());
+                std::cout << "Giver node entries after delete\n";
+                for(auto n : giverNode.entries) {
+                    std::cout << std::get<int32_t>(n.key) << "\n";
+
+                }
+                std::cout << "\n";
+                middle_entry->key = giverNode.entries.front().key;
+            }
+
+        }
+    }
+
+    Page* parentPage   = requestPage(file, pager, {fileID, parent.page_id});
+    Page* recieverPage = requestPage(file, pager, {fileID, recieverNode.page_id});
+    Page* giverPage    = requestPage(file, pager, {fileID, giverNode.page_id});
+    assert(parentPage);
+    assert(recieverPage);
+    assert(giverPage);
+
+    insertNodeIntoPage(parent, *parentPage, type);
+    insertNodeIntoPage(recieverNode, *recieverPage, type);
+    insertNodeIntoPage(giverNode, *giverPage, type);
+
+    return;
+}
+enum class Nstatus {
+    ABOVEMIN,
+    ATMIN,
+    NOTEXISTS
+};
+struct NeighborStatus {
+    Nstatus left;
+    Nstatus right;
+    std::optional<BTreeNode> right_node;
+    std::optional<BTreeNode> left_node;
+    BTreeNode parent;
+};
+NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, const DataType type) {
+    NeighborStatus status;
+    assert(node.page_id != ROOT);
+    assert(node.is_leaf);
+
+    if(node.next_leaf == 0) status.right == Nstatus::NOTEXISTS;
+    else {
+        auto next_leafId = node.next_leaf;
+        Page* nextPage   = requestPage(file, pager, {fileID, next_leafId});
+        assert(nextPage);
+        BTreeNode next_node = deserializeNode(nextPage->buffer, type, nextPage->header.NumRows);
+        assert(!is_underfull(next_node.entries.size()));
+        if(is_above_minimum(next_node.entries.size())) {
+            status.right = Nstatus::ABOVEMIN;
+        }
+        if(is_at_minimum(next_node.entries.size())) {
+            status.right = Nstatus::ATMIN;
+        }
+        status.right_node = next_node;
+    }
+
+    assert(history.nodes.size() > 1);
+    size_t prev_node = 0;
+    for(size_t i = history.nodes.size(); --i > 0;) {
+        if(history.nodes[i] == node.page_id) {
+            prev_node = --i;
+            break;
+        }
+    }
+    //assert(prev_node != 0);
+    PageID parentID = history.nodes[prev_node];
+    Page* parentPage = requestPage(file, pager, {fileID, parentID});
+    assert(parentPage);
+
+    BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
+    status.parent = parent;
+
+    InternalEntry current_entry;
+    if(parent.children.size() == 1) {
+        current_entry = parent.children[0];
+    }
+    else {
+        for(const auto& child : parent.children) {
+            if(child.left_child == node.page_id) current_entry = child;
+            if(child.right_child == node.page_id) current_entry = child;
+        }
+    }
+
+    PageID prev_leafID = 0;
+    Page* prev_page = nullptr;
+    if(current_entry.right_child == node.page_id) {
+        prev_leafID = current_entry.left_child;
+        Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
+        assert(prev_page);
+
+        BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+        assert(!is_underfull(prev_leaf.entries.size()));
+        if(is_at_minimum(prev_leaf.entries.size())) {
+            status.left = Nstatus::ATMIN;
+        }
+        if(is_above_minimum(prev_leaf.entries.size())) {
+            status.left = Nstatus::ABOVEMIN;
+        }
+        status.left_node = prev_leaf;
+        return status;
+    }
+    else {
+        if(parent.children.size() == 1) {
+            status.left = Nstatus::NOTEXISTS;
+            return status;
+        }
+        auto prev_internal_pos = FindPrevInternalEntry(parent, current_entry.key, type);
+        if(!prev_internal_pos) {
+            status.left = Nstatus::NOTEXISTS;
+            return status;
+        }
+        InternalEntry previous_internal = parent.children[*prev_internal_pos];
+        
+        prev_leafID = previous_internal.right_child;
+        Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
+        assert(prev_page);
+
+        BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+        assert(!is_underfull(prev_leaf.entries.size()));
+        if(is_at_minimum(prev_leaf.entries.size())) {
+            status.left = Nstatus::ATMIN;
+        }
+        if(is_above_minimum(prev_leaf.entries.size())) {
+            status.left = Nstatus::ABOVEMIN;
+        }
+        status.left_node = prev_leaf;
+        return status;
+    }
+    return status;
+}
+void REDESTRIBUTE(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, const DataType type) {
+    assert(node.is_leaf);
+    assert(node.page_id != ROOT);
+    assert(is_underfull(node.entries.size()));
+    NeighborStatus status = CheckNeighborStatus(file, node, pager, history, type);
+
+    if(status.left == Nstatus::ABOVEMIN) {
+        std::cout << "Borrwing from left leaf\n\n";
+        return;
+    }
+    else if(status.right == Nstatus::ABOVEMIN) {
+        std::cout << "Borrwing from right leaf\n\n";
+        assert(status.right_node);
+        auto direction = BorrowDirection::RIGHT;
+        BORROW(file, node, *status.right_node, status.parent, pager, direction, type);
+        return;
+    }
+
+    if(status.right == Nstatus::ATMIN) {
+        std::cout << "Merging with right\n\n";
+        return;
+    }
+    else if(status.left == Nstatus::ATMIN) {
+        std::cout << "Merging with left\n\n";
+        return;
+    }
+
+    std::cout << "Did not work properly\n\n\n";
+    return;
+
+
+}
+
 void INSERT_INTO_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
     DataType type = tree.header.Type;
     TraversalHistory history;
@@ -793,7 +1093,6 @@ void INSERT_INTO_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tre
     Page* page = requestPage(file, tree.pager, {fileID, result.page_id});
     assert(page);
 
-    std::vector<char> nodeBytes = serializeNode(result.node, type);
     if (!will_fit(result.node.entries.size())) {
         std::cout << "----------------\n";
         std::cout << "Num entries in node: " << result.node.entries.size() << "\n";
@@ -819,6 +1118,11 @@ void DELETE_FROM_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tre
 
     Page* page = requestPage(file, tree.pager, {fileID, result.page_id});
     assert(page);
+    
+    if(is_underfull(result.node.entries.size()) &&
+        result.node.page_id != ROOT) {
+        REDESTRIBUTE(file, result.node, tree.pager, history, type);
+    }
     insertNodeIntoPage(result.node, *page, type);
 }
 void UPDATE_FROM_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
@@ -934,19 +1238,24 @@ int main() {
 
     INSERT_INTO_TREE(file, {50, 104, 635}, tree);
     INSERT_INTO_TREE(file, {55, 104, 635}, tree);
+    INSERT_INTO_TREE(file, {90, 104, 635}, tree);
     /*
     std::cout << "--TREE mid progress--\n";
     printTree(file, tree);
     std::cout << "---------------------\n";
     */
 
-    INSERT_INTO_TREE(file, {100, 104, 0}, tree);
+    //INSERT_INTO_TREE(file, {100, 104, 0}, tree);
     INSERT_INTO_TREE(file, {60, 104, 364}, tree);
     INSERT_INTO_TREE(file, {80, 104, 635}, tree);
-    INSERT_INTO_TREE(file, {200, 104, 635}, tree);
+    //INSERT_INTO_TREE(file, {200, 104, 635}, tree);
 
+    //INSERT_INTO_TREE(file, {300, 104, 635}, tree);
+    //INSERT_INTO_TREE(file, {250, 104, 635}, tree);
+
+    DELETE_FROM_TREE(file, {50, 100, 100}, tree);
+    std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 250);
     /*
-    std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::LESSERorEQUAL, 100);
     std::cout << "-----RESULT-----" << "\n";
     if(results.empty()) std::cout << "No entries found\n";
     else {
@@ -956,6 +1265,7 @@ int main() {
     }
     */
   
+    std::cout << "\n\n\n\n\n\n\n";
     std::cout << "---TREE---\n";
     printTree(file, tree);
 
