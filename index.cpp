@@ -891,8 +891,8 @@ void MERGE(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
 }
 
 enum class BorrowDirection {
-    RIGHT,
-    LEFT
+    fromRIGHT,
+    fromLEFT
 };
 void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, BTreeNode& parent, 
             Pager& pager, const BorrowDirection direction, const DataType type) {
@@ -901,7 +901,7 @@ void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, B
     if(recieverNode.is_leaf) {
         assert(giverNode.is_leaf);
         switch(direction) {
-            case BorrowDirection::RIGHT:
+            case BorrowDirection::fromRIGHT:
             {
                 LeafEntry borrowed_entry = giverNode.entries.front();
                 recieverNode.entries.push_back(borrowed_entry);
@@ -924,6 +924,32 @@ void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, B
                 std::cout << "\n";
                 middle_entry->key = giverNode.entries.front().key;
             }
+                break;
+            case BorrowDirection::fromLEFT:
+            {
+                LeafEntry borrowed_entry = giverNode.entries.back();
+                recieverNode.entries.insert(recieverNode.entries.begin(), borrowed_entry);
+
+                InternalEntry* middle_entry = nullptr;
+                for(auto& entry : parent.children) {
+                    if(std::get<int32_t>(entry.key) > std::get<int32_t>(giverNode.entries.back().key)) {
+                        middle_entry = &entry;
+                        break;
+                    }
+                }
+                assert(middle_entry);
+
+                std::cout << "its this: \n";
+                giverNode.entries.erase(giverNode.entries.end() - 1);
+                std::cout << "never mind\n";
+                std::cout << "Giver node entries after delete\n";
+                for(auto n : giverNode.entries) {
+                    std::cout << std::get<int32_t>(n.key) << "\n";
+                }
+                std::cout << "\n";
+                middle_entry->key = recieverNode.entries.front().key;
+            }
+                break;
 
         }
     }
@@ -995,9 +1021,21 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
         current_entry = parent.children[0];
     }
     else {
+        size_t pos = 0;
         for(const auto& child : parent.children) {
-            if(child.left_child == node.page_id) current_entry = child;
-            if(child.right_child == node.page_id) current_entry = child;
+            if(child.left_child == node.page_id) {
+                if (pos == 0) {
+                    status.left == Nstatus::NOTEXISTS;
+                    return status;
+                }
+                current_entry = child;
+                break;
+            }
+            if(child.right_child == node.page_id) {
+                current_entry = child;
+                break;
+            }
+            pos++;
         }
     }
 
@@ -1011,9 +1049,16 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
         BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
         assert(!is_underfull(prev_leaf.entries.size()));
         if(is_at_minimum(prev_leaf.entries.size())) {
+            std::cout << "Left one was detected as above minimum\n\n\n ---------------";
+            int pos = 1;
+            for (auto entries: prev_leaf.entries) {
+                std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
+            }
+            std::cout << "---------------\n\n\n";
             status.left = Nstatus::ATMIN;
         }
         if(is_above_minimum(prev_leaf.entries.size())) {
+            std::cout << "Left one was detected as overfull\n\n\n";
             status.left = Nstatus::ABOVEMIN;
         }
         status.left_node = prev_leaf;
@@ -1026,6 +1071,7 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
         }
         auto prev_internal_pos = FindPrevInternalEntry(parent, current_entry.key, type);
         if(!prev_internal_pos) {
+            std::cout << "\n\n\n------\nRunTime got here\n------\n\n\n";
             status.left = Nstatus::NOTEXISTS;
             return status;
         }
@@ -1056,12 +1102,15 @@ void REDESTRIBUTE(std::fstream& file, BTreeNode& node, Pager& pager, const Trave
 
     if(status.left == Nstatus::ABOVEMIN) {
         std::cout << "Borrwing from left leaf\n\n";
+        assert(status.left_node);
+        auto direction = BorrowDirection::fromLEFT;
+        BORROW(file, node, *status.left_node, status.parent, pager, direction, type);
         return;
     }
     else if(status.right == Nstatus::ABOVEMIN) {
         std::cout << "Borrwing from right leaf\n\n";
         assert(status.right_node);
-        auto direction = BorrowDirection::RIGHT;
+        auto direction = BorrowDirection::fromRIGHT;
         BORROW(file, node, *status.right_node, status.parent, pager, direction, type);
         return;
     }
@@ -1238,7 +1287,7 @@ int main() {
 
     INSERT_INTO_TREE(file, {50, 104, 635}, tree);
     INSERT_INTO_TREE(file, {55, 104, 635}, tree);
-    INSERT_INTO_TREE(file, {90, 104, 635}, tree);
+    INSERT_INTO_TREE(file, {57, 104, 635}, tree);
     /*
     std::cout << "--TREE mid progress--\n";
     printTree(file, tree);
@@ -1253,7 +1302,7 @@ int main() {
     //INSERT_INTO_TREE(file, {300, 104, 635}, tree);
     //INSERT_INTO_TREE(file, {250, 104, 635}, tree);
 
-    DELETE_FROM_TREE(file, {50, 100, 100}, tree);
+    DELETE_FROM_TREE(file, {60, 100, 100}, tree);
     std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 250);
     /*
     std::cout << "-----RESULT-----" << "\n";
