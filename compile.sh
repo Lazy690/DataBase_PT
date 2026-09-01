@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 clear
 cmake --build build
 cd build

@@ -486,6 +486,28 @@ std::optional<size_t> find_leaf_entry_position(const var key, const std::vector<
     }
     return std::nullopt;
 }
+std::optional<size_t> find_internal_entry_position(const var key, const std::vector<InternalEntry>& buffer, const DataType type) {
+    for(size_t i = 0; i < buffer.size(); i++) {
+        switch(type) {
+            case DataType::INT:
+            {
+                if(std::get<int32_t>(key) == std::get<int32_t>(buffer[i].key)) return i;
+            }
+                break;
+            case DataType::STRING:
+            {
+                if(std::get<std::string>(key) == std::get<std::string>(buffer[i].key)) return i;
+            }
+                break;
+            case DataType::DOUBLE:
+            {
+                if(std::get<double>(key) == std::get<double>(buffer[i].key)) return i;
+            }
+                break;
+        }
+    }
+    return std::nullopt;
+}
 
 void insert_into_leaf(BTreeNode& node, const LeafEntry& entry, const DataType type) {
     assert(node.is_leaf);
@@ -536,6 +558,14 @@ void insert_into_internal(BTreeNode& node, const InternalEntry& child, const Dat
     auto insert_pos = node.children.begin();
     insert_pos += sorted_insert_position(child.key, node.children, type);
     node.children.insert(insert_pos, child);
+}
+void delete_from_internal(BTreeNode& node, const InternalEntry& child, const DataType type) {
+    assert(!node.is_leaf);
+    auto it = node.children.begin();
+    auto delete_pos = find_internal_entry_position(child.key, node.children, type); 
+    if(!delete_pos) return;
+    it += *delete_pos;
+    node.children.erase(it);
 }
 
 PageID FindNextChild(const BTreeNode& node, const var& key, const DataType type) {
@@ -679,7 +709,7 @@ std::optional<size_t> FindNextInternalEntry(const BTreeNode& node, const var key
 std::optional<size_t> FindPrevInternalEntry(const BTreeNode& node, const var key, DataType type) {
     assert(!node.is_leaf);
     //size_t i = 0;
-    if(is_same_var(node.children.back().key, key, type)) return std::nullopt;
+    if(is_same_var(node.children.front().key, key, type)) return std::nullopt;
     for (size_t i = 0; i < node.children.size(); i++) {
         if (is_same_var(node.children[i].key, key, type)) return --i;
     }
@@ -885,9 +915,105 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         return;
     }
 }
+enum class Nstatus {
+    ABOVEMIN,
+    ATMIN,
+    NOTEXISTS
+};
+struct NeighborStatus {
+    Nstatus left;
+    Nstatus right;
+    std::optional<BTreeNode> right_node;
+    std::optional<BTreeNode> left_node;
+    BTreeNode parent;
+};
 
-void MERGE(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, uint32_t& latest_page_id, const DataType type) {
+void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, NeighborStatus status, Pager& pager, const DataType type) {
+    
+    BTreeNode parent = status.parent;
+    
+    assert(!parent.is_leaf);
+    if(mergerNode.is_leaf) {
+        assert(mergerNode.is_leaf);
 
+        InternalEntry* middle_entry = nullptr;
+        assert(!recieverNode.entries.empty());
+        if (status.left_node && !status.right_node) {
+
+            for(auto& entry : parent.children) {
+                if(is_same_var(mergerNode.entries.front().key, entry.key, type)) {
+                    middle_entry = &entry;
+                    break;
+                }
+            }
+          
+        }
+        else {
+
+            for(auto& entry : parent.children) {
+                if(is_same_var(recieverNode.entries.front().key, entry.key, type)) {
+                    middle_entry = &entry;
+                    break;
+                }
+            }
+
+        }
+        assert(middle_entry);
+
+        for(const auto& entry : mergerNode.entries) {
+            insert_into_leaf(recieverNode, entry, type);
+        }
+        
+        //case where middle leaf was eliminated
+        if(status.left_node && status.right_node) {
+            assert(status.right_node->page_id == recieverNode.page_id);
+            auto prev_child_pos = FindPrevInternalEntry(parent, middle_entry->key, type);
+            assert(prev_child_pos);
+            InternalEntry& prev_child  = parent.children.at(*prev_child_pos);
+            prev_child.right_child = status.right_node->page_id;
+
+            status.left_node->next_leaf = status.right_node->page_id;
+
+            Page* leftPage = requestPage(file, pager, {fileID, status.left_node->page_id});
+            assert(leftPage);
+            insertNodeIntoPage(*status.left_node, *leftPage, type);
+        }
+        //left most leaf 
+        else if(!status.left_node && status.right_node) {
+        }
+        //right most leaf
+        else if(status.left_node && !status.right_node) {
+            //0 is null
+            status.left_node->next_leaf = 0;
+            Page* leftPage = requestPage(file, pager, {fileID, status.left_node->page_id});
+            assert(leftPage);
+            insertNodeIntoPage(*status.left_node, *leftPage, type);
+        }
+        else {
+            assert(false);
+        }
+
+        Page* parentPage   = requestPage(file, pager, {fileID, parent.page_id});
+        Page* recieverPage = requestPage(file, pager, {fileID, recieverNode.page_id});
+        assert(parentPage);
+        assert(recieverPage);
+
+        insertNodeIntoPage(recieverNode, *recieverPage, type);
+
+        delete_from_internal(parent, *middle_entry,  type);
+        std::cout << "post deleteion from internal: \n";
+        for(auto entry : parent.children) {
+            std::cout << std::get<int32_t>(entry.key) << "\n";
+        }
+        std::cout << "------\n";
+        insertNodeIntoPage(parent, *parentPage, type);
+        pager.pages.erase({fileID, mergerNode.page_id});
+
+    }
+    else {
+
+    }
+    return;
 }
 
 enum class BorrowDirection {
@@ -967,18 +1093,6 @@ void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, B
 
     return;
 }
-enum class Nstatus {
-    ABOVEMIN,
-    ATMIN,
-    NOTEXISTS
-};
-struct NeighborStatus {
-    Nstatus left;
-    Nstatus right;
-    std::optional<BTreeNode> right_node;
-    std::optional<BTreeNode> left_node;
-    BTreeNode parent;
-};
 NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, const DataType type) {
     NeighborStatus status;
     assert(node.page_id != ROOT);
@@ -1117,17 +1231,19 @@ void REDESTRIBUTE(std::fstream& file, BTreeNode& node, Pager& pager, const Trave
 
     if(status.right == Nstatus::ATMIN) {
         std::cout << "Merging with right\n\n";
+        assert(status.right_node);
+        MERGE(file, node, *status.right_node, status, pager, type);
         return;
     }
     else if(status.left == Nstatus::ATMIN) {
         std::cout << "Merging with left\n\n";
+        assert(status.left_node);
+        MERGE(file, node, *status.left_node, status, pager, type);
         return;
     }
 
     std::cout << "Did not work properly\n\n\n";
     return;
-
-
 }
 
 void INSERT_INTO_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tree) {
@@ -1287,7 +1403,6 @@ int main() {
 
     INSERT_INTO_TREE(file, {50, 104, 635}, tree);
     INSERT_INTO_TREE(file, {55, 104, 635}, tree);
-    INSERT_INTO_TREE(file, {57, 104, 635}, tree);
     /*
     std::cout << "--TREE mid progress--\n";
     printTree(file, tree);
@@ -1302,7 +1417,7 @@ int main() {
     //INSERT_INTO_TREE(file, {300, 104, 635}, tree);
     //INSERT_INTO_TREE(file, {250, 104, 635}, tree);
 
-    DELETE_FROM_TREE(file, {60, 100, 100}, tree);
+    DELETE_FROM_TREE(file, {10, 100, 100}, tree);
     std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 250);
     /*
     std::cout << "-----RESULT-----" << "\n";
