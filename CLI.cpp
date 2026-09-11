@@ -10,7 +10,7 @@ RecordHeader oglobalRBHEADER{0x44415441, 5};
 LoggerHeader oglobalLogHeader{0x44518449, 4};
 BeforeImageHeader oglobalImageHeader{0x75314648, 1};
 
-int mainmn() {
+int main() {
     CacheManagement cache;
 
     std::string input = "";

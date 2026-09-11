@@ -34,6 +34,7 @@ struct InternalEntry {
     std::variant <int32_t, std::string, double> key;
     PageID left_child = 0;
     PageID right_child = 0;
+
 };
 
 struct BTreeNode {
@@ -336,40 +337,43 @@ void printNode(const BTreeNode& node, DataType type) {
     }
 }
 
-void printTree(std::fstream& file, BPlusTree& tree) {
-    DataType type = tree.header.Type;
+void printTree(std::fstream& file, Pager& pager, BTreeNode& node, DataType type) {
 
-    Page* rootp = requestPage(file, tree.pager, {fileID, tree.root});
-    assert(rootp);
-    BTreeNode root = deserializeNode(rootp->buffer, type, rootp->header.NumRows);
+    static int internal_count = 1;
 
-    if(root.is_leaf) {
-        printNode(root, type);
-        return;
+    if(node.is_leaf) {
+        printNode(node, type);
+    }
+    else {
+        std::cout << "----Internal Node: " << internal_count++ << " ----\n";
+        printNode(node, type);
+
+        int count = 1;
+        for (auto child : node.children) {
+            std::cout << "----------\nInternal entry: " << count++ << "\n----------\n";
+            printInternalEntry(child, type);
+            std::cout << "\n\n";
+            if (child.left_child == 0) continue; 
+            Page* lp = requestPage(file, pager, {fileID, child.left_child}); assert(lp);
+            assert(lp);
+            BTreeNode lnode = deserializeNode(lp->buffer, type, lp->header.NumRows);
+            std::cout << " << LEFT\n";
+            printTree(file, pager, lnode, type);
+
+            if (child.right_child == 0) continue;
+            Page* rp = requestPage(file, pager, {fileID, child.right_child}); 
+            assert(rp);
+            BTreeNode rnode = deserializeNode(rp->buffer, type, rp->header.NumRows);
+            std::cout << "RIGHT >>\n";
+            printTree(file, pager, rnode, type);
+        }
+        std::cout << "-----------------\n";
+
     }
 
-    std::cout << "----ROOT----\n";
-    printNode(root, type);
-    std::cout << "------------\n";
 
-    size_t i = 1;
-    for (auto& internal : root.children) {
-        std::cout << "EInternal entry: " << i << "\n";
-        Page* leftP = requestPage(file, tree.pager, {fileID, internal.left_child});
-        assert(leftP);
-        Page* rightP = requestPage(file, tree.pager, {fileID, internal.right_child});
-        assert(rightP);
 
-        BTreeNode left  = deserializeNode(leftP->buffer, type, leftP->header.NumRows);
-        BTreeNode right = deserializeNode(rightP->buffer, type, rightP->header.NumRows);
-        std::cout << "----Leafes----\n";
-        std::cout << "<< LEFT\n";
-        printNode(left, type);
-        std::cout << ">> RIGHT\n";
-        printNode(right, type);
-        std::cout << "--------------\n";
-        i++;
-    }
+
 }
 void overriteNodeIntoBuff(std::vector<char>& buff, const std::vector<char>& nodeBytes, const DataType type) {
     buff = {};
@@ -387,6 +391,9 @@ void insertNodeIntoPage(const BTreeNode& node, Page& page, const DataType type) 
         NumEntry = node.children.size();
     }
     std::vector<char> bytes = serializeNode(node, type);
+    if (!(page.header.freespace + bytes.size() <= PAGE_SIZE)) {
+        std::cout << "inside Page.header.freespace + bytes.size(): " << page.header.freespace + bytes.size() << " <= " << PAGE_SIZE << "\n";
+    }
     assert(page.header.freespace + bytes.size() <= PAGE_SIZE);
     overriteNodeIntoBuff(page.buffer, bytes, type);
     page.header.freespace = bytes.size();
@@ -926,7 +933,175 @@ struct NeighborStatus {
     std::optional<BTreeNode> right_node;
     std::optional<BTreeNode> left_node;
     BTreeNode parent;
+    TraversalHistory history;
 };
+
+std::optional<size_t> FindEntryPosition(const BTreeNode internal, const var key, const DataType type) {
+    assert(!internal.is_leaf);
+    assert(!internal.children.empty());
+    size_t index = 0;
+    for (const auto& child : internal.children) {
+        switch(type) {
+            case DataType::INT:
+            {
+                if(std::get<int32_t>(key) < std::get<int32_t>(child.key)) {
+                    std::cout << "key: " << std::get<int32_t>(key) << " is lesser then " << std::get<int32_t>(child.key) << "\n";
+                    std::cout << "Returning index " << index << "\n";
+                    return index;
+                }
+                else if(std::get<int32_t>(key) >= std::get<int32_t>(child.key) &&
+                    (index + 1) == internal.children.size()) {
+                    std::cout << "key: " << std::get<int32_t>(key) << " is greater or equal to " << std::get<int32_t>(child.key) << "\n";
+                    std::cout << "Returning index " << index << "\n";
+                    std::cout << "----internal entry----\n";
+                    printInternalEntry(child, type);
+                    return index;
+                }
+            }
+                break;
+            case DataType::STRING:
+            {
+                if(std::get<std::string>(key) < std::get<std::string>(child.key)) {
+                    return index;
+                }
+                else if(std::get<std::string>(key) >= std::get<std::string>(child.key) &&
+                    index == internal.children.size()) {
+                    return index;
+                }
+            }
+                break;
+            case DataType::DOUBLE:
+            {
+                if(std::get<int32_t>(key) < std::get<int32_t>(child.key)) {
+                    return index;
+                }
+                else if(std::get<int32_t>(key) >= std::get<int32_t>(child.key) &&
+                    index == internal.children.size()) {
+                    return index;
+                }
+            }
+                break;
+        }
+        index++;
+    }
+    return std::nullopt;
+}
+
+InternalEntry* FindMiddleIntEntry(BTreeNode& parent,
+                                  const BTreeNode& recieverNode, 
+                                  const BTreeNode& mergerNode,
+                                  const DataType type) {
+
+    InternalEntry* middle_entry = nullptr;
+    assert(!recieverNode.entries.empty());
+
+    std::cout << "finding pos: " << std::get<int32_t>(recieverNode.entries.front().key) << "\n";
+    auto mergerInternalPos = FindEntryPosition(parent, recieverNode.entries.front().key, type);
+    assert(mergerInternalPos);
+    std::cout << "finding pos: " << std::get<int32_t>(mergerNode.entries.front().key) << "\n";
+    auto recieverInternalPos = FindEntryPosition(parent, mergerNode.entries.front().key, type);
+    assert(recieverInternalPos);
+
+    if (mergerInternalPos != recieverInternalPos) {
+        if (parent.children.at(*mergerInternalPos).right_child ==
+            parent.children.at(*recieverInternalPos).left_child) {
+            *recieverInternalPos = *mergerInternalPos;
+        }
+    }
+    assert(is_same_var(parent.children.at(*mergerInternalPos).key,
+                     parent.children.at(*recieverInternalPos).key,
+                     type) && "Failed to find middle internal entry.\n");
+
+    middle_entry = &parent.children.at(*mergerInternalPos);
+    return middle_entry;
+}
+
+PageID FindParentPageID(const TraversalHistory& history, const BTreeNode childNode, const size_t* pos = nullptr) {
+    if(history.nodes.size() == 1) {
+        return 0;
+    }
+    if (pos) {
+        std::cout << "pos: " << *pos << " his size: " << history.nodes.size() << "\n";
+        assert(*pos < history.nodes.size());
+        if (*pos == 0) return 0;
+        return history.nodes.at(*pos - 1);
+    }
+
+    size_t prev_node = 0;
+    for(size_t i = history.nodes.size(); --i > 0;) {
+        if(history.nodes[i] == childNode.page_id) {
+            assert(history.nodes[i] == childNode.page_id);
+            prev_node = --i;
+            break;
+        }
+    }
+    return history.nodes.at(prev_node);
+}
+
+void UpdatePointerFromOtherInternal(std::fstream& file, Pager& pager, PageID UpperPageID, InternalEntry* middle_entry, NeighborStatus& status, DataType type) {
+    Page* UpperPage = requestPage(file, pager, {fileID, UpperPageID});
+    assert(UpperPage);
+
+    BTreeNode upperParent = deserializeNode(UpperPage->buffer, type, UpperPage->header.NumRows);
+    assert(!upperParent.is_leaf);
+
+    auto internal_pos = FindEntryPosition(upperParent, middle_entry->key, type);
+    assert(internal_pos);
+
+    PageID adjacentInternalID = 0;
+    if (status.left_node && !status.right_node) {
+        adjacentInternalID = upperParent.children.at(*internal_pos).right_child; 
+    }
+    else if (!status.left_node && status.right_node) {
+        adjacentInternalID = upperParent.children.at(*internal_pos).left_child; 
+    }
+    assert(adjacentInternalID != 0);
+
+    Page* adjacentInternalPage = requestPage(file, pager, {fileID, adjacentInternalID}); 
+    assert(adjacentInternalID);
+
+    BTreeNode AdjNode = deserializeNode(adjacentInternalPage->buffer, type, adjacentInternalPage->header.NumRows);
+    assert(!AdjNode.is_leaf);
+
+    if(status.left_node && !status.right_node) {
+        std::cout << "left node exists\n\n";
+
+        InternalEntry& leftMostIntEntry = AdjNode.children.front();
+
+        leftMostIntEntry.left_child = status.left_node->page_id;
+        std::cout << "Asigning new next_leaf from " << status.left_node->next_leaf << " to " << leftMostIntEntry.right_child << "\n";
+        status.left_node->next_leaf = leftMostIntEntry.right_child;
+        std::cout << "after: " << status.left_node->next_leaf << "\n\n\n\n\n\n";
+
+        Page* leftPage = requestPage(file, pager, {fileID, status.left_node->page_id});
+        assert(leftPage);
+
+        insertNodeIntoPage(AdjNode, *adjacentInternalPage, type);
+        insertNodeIntoPage(*status.left_node, *leftPage, type);
+    }
+    else if(!status.left_node && status.right_node) {
+
+        InternalEntry& rightMostIntEntry = AdjNode.children.back();
+
+        rightMostIntEntry.right_child = status.right_node->page_id;
+
+        Page* leftMostLeafPage = requestPage(file, pager, {fileID, rightMostIntEntry.right_child});
+        assert(leftMostLeafPage);
+
+        BTreeNode leftMostLeaf = deserializeNode(leftMostLeafPage->buffer, type, leftMostLeafPage->header.NumRows);
+        assert(leftMostLeaf.is_leaf);
+
+        leftMostLeaf.next_leaf = rightMostIntEntry.right_child;
+
+        auto next_internal_pos = FindNextInternalEntry(status.parent, status.parent.children.front().key, type);
+        assert(next_internal_pos);
+        std::cout << "----\n internal pos on update: " << *next_internal_pos << "\n----\n\n\n";
+        status.parent.children.at(*next_internal_pos).left_child = leftMostLeaf.page_id;
+
+        insertNodeIntoPage(AdjNode, *adjacentInternalPage, type);
+        insertNodeIntoPage(leftMostLeaf, *leftMostLeafPage, type);
+    }
+}
 
 void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, NeighborStatus status, Pager& pager, const DataType type) {
     
@@ -934,14 +1109,15 @@ void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, N
     
     assert(!parent.is_leaf);
     if(mergerNode.is_leaf) {
-        assert(mergerNode.is_leaf);
+        assert(recieverNode.is_leaf);
 
+        
         InternalEntry* middle_entry = nullptr;
         assert(!recieverNode.entries.empty());
         if (status.left_node && !status.right_node) {
 
             for(auto& entry : parent.children) {
-                if(is_same_var(mergerNode.entries.front().key, entry.key, type)) {
+                if(is_same_var(mergerNode.children.front().key, entry.key, type)) {
                     middle_entry = &entry;
                     break;
                 }
@@ -949,16 +1125,16 @@ void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, N
           
         }
         else {
-
             for(auto& entry : parent.children) {
-                if(is_same_var(recieverNode.entries.front().key, entry.key, type)) {
+                if(is_same_var(recieverNode.children.front().key, entry.key, type)) {
                     middle_entry = &entry;
                     break;
                 }
             }
-
         }
         assert(middle_entry);
+
+        middle_entry = FindMiddleIntEntry(status.parent, recieverNode, mergerNode, type);
 
         for(const auto& entry : mergerNode.entries) {
             insert_into_leaf(recieverNode, entry, type);
@@ -980,17 +1156,111 @@ void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, N
         }
         //left most leaf 
         else if(!status.left_node && status.right_node) {
+            std::cout << "Runtime got here\n\n";
+            const size_t parent_history_position = 1;
+            PageID upperPageID = FindParentPageID(status.history, status.parent, &parent_history_position);
+            if (upperPageID != 0) {
+                UpdatePointerFromOtherInternal(file, pager, upperPageID, middle_entry, status, type);
+            }
+            recieverNode.next_leaf = status.right_node->next_leaf;
         }
         //right most leaf
         else if(status.left_node && !status.right_node) {
             //0 is null
-            status.left_node->next_leaf = 0;
-            Page* leftPage = requestPage(file, pager, {fileID, status.left_node->page_id});
-            assert(leftPage);
-            insertNodeIntoPage(*status.left_node, *leftPage, type);
+
+            const size_t parent_history_position = 1;
+            PageID upperPageID = FindParentPageID(status.history, status.parent, &parent_history_position);
+
+            if (upperPageID != 0) {
+                UpdatePointerFromOtherInternal(file, pager, upperPageID, middle_entry, status, type);
+            }
+            else {
+                status.left_node->next_leaf = 0;
+                Page* leftPage = requestPage(file, pager, {fileID, status.left_node->page_id});
+                assert(leftPage);
+                insertNodeIntoPage(*status.left_node, *leftPage, type);
+            }
+            recieverNode.next_leaf = status.left_node->next_leaf;
         }
         else {
             assert(false);
+        }
+
+        Page* parentPage   = requestPage(file, pager, {fileID, parent.page_id});
+        Page* recieverPage = requestPage(file, pager, {fileID, recieverNode.page_id});
+        assert(parentPage);
+        assert(recieverPage);
+
+        assert(recieverNode.next_leaf == status.left_node->next_leaf);
+        insertNodeIntoPage(recieverNode, *recieverPage, type);
+
+        std::cout << "[Deleting] internal entry: " << std::get<int32_t>(middle_entry->key) << "\n";
+        delete_from_internal(parent, *middle_entry,  type);
+        std::cout << "post deleteion from internal: \n";
+        for(auto entry : parent.children) {
+            std::cout << std::get<int32_t>(entry.key) << "\n";
+        }
+        if (parent.page_id == ROOT && parent.children.empty()) {
+            assert(parent.entries.empty());
+            parent.entries = recieverNode.entries;
+            std::cout << "erasing page leaf: " << mergerNode.page_id << "\n";
+            pager.pages.erase({fileID, recieverNode.page_id});
+            parent.is_leaf = true;
+        }
+
+        std::cout << "------\n";
+        insertNodeIntoPage(parent, *parentPage, type);
+        std::cout << "erasing page leaf: " << mergerNode.page_id << "\n";
+        pager.pages.erase({fileID, mergerNode.page_id});
+
+    }
+    else if (!mergerNode.is_leaf) {
+        assert(!recieverNode.is_leaf);
+
+        InternalEntry* middle_entry = nullptr;
+        assert(!recieverNode.children.empty());
+        if (status.left_node && !status.right_node) {
+
+            for(auto& entry : parent.children) {
+                if(is_same_var(mergerNode.children.front().key, entry.key, type)) {
+                    middle_entry = &entry;
+                    break;
+                }
+            }
+          
+        }
+        else {
+            for(auto& entry : parent.children) {
+                if(is_same_var(recieverNode.children.front().key, entry.key, type)) {
+                    middle_entry = &entry;
+                    break;
+                }
+            }
+        }
+
+        for(auto& entry : parent.children) {
+            if(is_same_var(recieverNode.children.front().key, entry.key, type)) {
+                middle_entry = &entry;
+                break;
+            }
+        }
+        assert(middle_entry);
+
+        for(const auto& entry : mergerNode.children) {
+            insert_into_internal(recieverNode, entry, type);
+        }
+
+        if(status.left_node && status.right_node) {
+            //case where middle internal entry was eliminated
+            assert(status.right_node->page_id == recieverNode.page_id);
+            auto prev_child_pos = FindPrevInternalEntry(parent, middle_entry->key, type);
+            assert(prev_child_pos);
+            InternalEntry& prev_child  = parent.children.at(*prev_child_pos);
+            prev_child.right_child = status.right_node->page_id;
+
+            Page* leftPage = requestPage(file, pager, {fileID, status.left_node->page_id});
+            assert(leftPage);
+            insertNodeIntoPage(*status.left_node, *leftPage, type);
         }
 
         Page* parentPage   = requestPage(file, pager, {fileID, parent.page_id});
@@ -1005,13 +1275,17 @@ void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, N
         for(auto entry : parent.children) {
             std::cout << std::get<int32_t>(entry.key) << "\n";
         }
+        if (parent.page_id == ROOT && parent.children.empty()){
+            parent.children = {};
+            parent.children = recieverNode.children;
+            std::cout << "erasing page internal: " << mergerNode.page_id << "\n";
+            pager.pages.erase({fileID, recieverNode.page_id});
+        }
+
         std::cout << "------\n";
         insertNodeIntoPage(parent, *parentPage, type);
+        std::cout << "erasing page internal: " << mergerNode.page_id << "\n";
         pager.pages.erase({fileID, mergerNode.page_id});
-
-    }
-    else {
-
     }
     return;
 }
@@ -1019,6 +1293,10 @@ void MERGE(std::fstream& file, BTreeNode& mergerNode, BTreeNode& recieverNode, N
 enum class BorrowDirection {
     fromRIGHT,
     fromLEFT
+};
+enum class Direction {
+    RIGHT,
+    LEFT
 };
 void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, BTreeNode& parent, 
             Pager& pager, const BorrowDirection direction, const DataType type) {
@@ -1079,6 +1357,57 @@ void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, B
 
         }
     }
+    else {
+        switch(direction) {
+            case BorrowDirection::fromRIGHT:
+            {
+                InternalEntry borrowed_entry = giverNode.children.front();
+                recieverNode.children.push_back(borrowed_entry);
+
+                InternalEntry* middle_entry = nullptr;
+                for(auto& entry : parent.children) {
+                    if(is_same_var(borrowed_entry.key, entry.key, type)) {
+                        middle_entry = &entry;
+                        break;
+                    }
+                }
+                assert(middle_entry);
+
+                giverNode.children.erase(giverNode.children.begin());
+                std::cout << "Giver node entries after delete\n";
+                for(auto n : giverNode.children) {
+                    std::cout << std::get<int32_t>(n.key) << "\n";
+
+                }
+                std::cout << "\n";
+                middle_entry->key = giverNode.children.front().key;
+            }
+                break;
+            case BorrowDirection::fromLEFT:
+            {
+                InternalEntry borrowed_entry = giverNode.children.back();
+                recieverNode.children.insert(recieverNode.children.begin(), borrowed_entry);
+
+                InternalEntry* middle_entry = nullptr;
+                for(auto& entry : parent.children) {
+                    if(std::get<int32_t>(entry.key) > std::get<int32_t>(giverNode.entries.back().key)) {
+                        middle_entry = &entry;
+                        break;
+                    }
+                }
+                assert(middle_entry);
+
+                giverNode.children.erase(giverNode.children.end() - 1);
+                std::cout << "Giver node entries after delete\n";
+                for(auto n : giverNode.children) {
+                    std::cout << std::get<int32_t>(n.key) << "\n";
+                }
+                std::cout << "\n";
+                middle_entry->key = recieverNode.children.front().key;
+            }
+                break;
+        }
+    }
 
     Page* parentPage   = requestPage(file, pager, {fileID, parent.page_id});
     Page* recieverPage = requestPage(file, pager, {fileID, recieverNode.page_id});
@@ -1095,121 +1424,344 @@ void BORROW(std::fstream& file, BTreeNode& recieverNode, BTreeNode& giverNode, B
 }
 NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, const DataType type) {
     NeighborStatus status;
+    status.history = history;
     assert(node.page_id != ROOT);
-    assert(node.is_leaf);
 
-    if(node.next_leaf == 0) status.right == Nstatus::NOTEXISTS;
-    else {
-        auto next_leafId = node.next_leaf;
-        Page* nextPage   = requestPage(file, pager, {fileID, next_leafId});
-        assert(nextPage);
-        BTreeNode next_node = deserializeNode(nextPage->buffer, type, nextPage->header.NumRows);
-        assert(!is_underfull(next_node.entries.size()));
-        if(is_above_minimum(next_node.entries.size())) {
-            status.right = Nstatus::ABOVEMIN;
+    if(node.is_leaf) {
+        /*
+        if(node.next_leaf == 0) status.right == Nstatus::NOTEXISTS;
+        else {
+            auto next_leafId = node.next_leaf;
+            Page* nextPage   = requestPage(file, pager, {fileID, next_leafId});
+            assert(nextPage);
+            BTreeNode next_node = deserializeNode(nextPage->buffer, type, nextPage->header.NumRows);
+            assert(!is_underfull(next_node.entries.size()));
+            if(is_above_minimum(next_node.entries.size())) {
+                status.right = Nstatus::ABOVEMIN;
+            }
+            if(is_at_minimum(next_node.entries.size())) {
+                status.right = Nstatus::ATMIN;
+            }
+            status.right_node = next_node;
         }
-        if(is_at_minimum(next_node.entries.size())) {
-            status.right = Nstatus::ATMIN;
-        }
-        status.right_node = next_node;
-    }
+        */
 
-    assert(history.nodes.size() > 1);
-    size_t prev_node = 0;
-    for(size_t i = history.nodes.size(); --i > 0;) {
-        if(history.nodes[i] == node.page_id) {
-            prev_node = --i;
-            break;
-        }
-    }
-    //assert(prev_node != 0);
-    PageID parentID = history.nodes[prev_node];
-    Page* parentPage = requestPage(file, pager, {fileID, parentID});
-    assert(parentPage);
-
-    BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
-    status.parent = parent;
-
-    InternalEntry current_entry;
-    if(parent.children.size() == 1) {
-        current_entry = parent.children[0];
-    }
-    else {
-        size_t pos = 0;
-        for(const auto& child : parent.children) {
-            if(child.left_child == node.page_id) {
-                if (pos == 0) {
-                    status.left == Nstatus::NOTEXISTS;
-                    return status;
-                }
-                current_entry = child;
+        assert(history.nodes.size() > 1);
+        size_t prev_node = 0;
+        for(size_t i = history.nodes.size(); --i > 0;) {
+            if(history.nodes[i] == node.page_id) {
+                prev_node = --i;
                 break;
             }
-            if(child.right_child == node.page_id) {
-                current_entry = child;
-                break;
-            }
-            pos++;
         }
-    }
+        //assert(prev_node != 0);
+        PageID parentID = history.nodes[prev_node];
+        Page* parentPage = requestPage(file, pager, {fileID, parentID});
+        assert(parentPage);
 
-    PageID prev_leafID = 0;
-    Page* prev_page = nullptr;
-    if(current_entry.right_child == node.page_id) {
-        prev_leafID = current_entry.left_child;
-        Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
-        assert(prev_page);
+        BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
+        status.parent = parent;
 
-        BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
-        assert(!is_underfull(prev_leaf.entries.size()));
-        if(is_at_minimum(prev_leaf.entries.size())) {
-            std::cout << "Left one was detected as above minimum\n\n\n ---------------";
-            int pos = 1;
-            for (auto entries: prev_leaf.entries) {
-                std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
-            }
-            std::cout << "---------------\n\n\n";
-            status.left = Nstatus::ATMIN;
-        }
-        if(is_above_minimum(prev_leaf.entries.size())) {
-            std::cout << "Left one was detected as overfull\n\n\n";
-            status.left = Nstatus::ABOVEMIN;
-        }
-        status.left_node = prev_leaf;
-        return status;
-    }
-    else {
+        InternalEntry current_entry;
         if(parent.children.size() == 1) {
-            status.left = Nstatus::NOTEXISTS;
-            return status;
+            current_entry = parent.children[0];
         }
-        auto prev_internal_pos = FindPrevInternalEntry(parent, current_entry.key, type);
-        if(!prev_internal_pos) {
-            std::cout << "\n\n\n------\nRunTime got here\n------\n\n\n";
-            status.left = Nstatus::NOTEXISTS;
-            return status;
+        else {
+            size_t pos = 0;
+            for(const auto& child : parent.children) {
+                if(child.left_child == node.page_id) {
+                    if (pos == 0 && history.nodes.size() > 2) {
+                        status.left = Nstatus::NOTEXISTS;
+                    }
+                    current_entry = child;
+                    break;
+                }
+                if(child.right_child == node.page_id) {
+                    if (pos == (parent.children.size() - 1) && history.nodes.size() > 2) {
+                        status.left = Nstatus::NOTEXISTS;
+                    }
+                    current_entry = child;
+                    break;
+                }
+                pos++;
+            }
         }
-        InternalEntry previous_internal = parent.children[*prev_internal_pos];
-        
-        prev_leafID = previous_internal.right_child;
-        Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
-        assert(prev_page);
 
-        BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
-        assert(!is_underfull(prev_leaf.entries.size()));
-        if(is_at_minimum(prev_leaf.entries.size())) {
-            status.left = Nstatus::ATMIN;
+        PageID prev_leafID = 0;
+        PageID next_leafID = 0;
+        Page* prev_page = nullptr;
+        Page* next_page = nullptr;
+
+        if(current_entry.right_child == node.page_id) {
+            prev_leafID = current_entry.left_child;
+            Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
+            assert(prev_page);
+
+            BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            assert(!is_underfull(prev_leaf.entries.size()));
+            if(is_at_minimum(prev_leaf.entries.size())) {
+                std::cout << "Left one was detected as at minimum\n\n\n ---------------";
+                int pos = 1;
+                for (auto entries: prev_leaf.entries) {
+                    std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
+                }
+                std::cout << "---------------\n\n\n";
+                status.left = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(prev_leaf.entries.size())) {
+                std::cout << "Left one was detected as overfull\n\n\n";
+                status.left = Nstatus::ABOVEMIN;
+            }
+            status.left_node = prev_leaf;
+            return status;
         }
-        if(is_above_minimum(prev_leaf.entries.size())) {
-            status.left = Nstatus::ABOVEMIN;
+        else if (current_entry.left_child == node.page_id) {
+            next_leafID = current_entry.right_child;
+            Page* next_page = requestPage(file, pager, {fileID, next_leafID});
+            assert(next_page);
+
+            BTreeNode next_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            assert(next_leaf.is_leaf);
+            assert(!is_underfull(next_leaf.entries.size()));
+            if(is_at_minimum(next_leaf.entries.size())) {
+                std::cout << "Left one was detected at minimum\n\n\n ---------------";
+                int pos = 1;
+                for (auto entries: next_leaf.entries) {
+                    std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
+                }
+                std::cout << "---------------\n\n\n";
+                status.left = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(next_leaf.entries.size())) {
+                std::cout << "Left one was detected as overfull\n\n\n";
+                status.left = Nstatus::ABOVEMIN;
+            }
+            status.right_node = next_leaf;
+            return status;
         }
-        status.left_node = prev_leaf;
+
+        if(status.right == Nstatus::NOTEXISTS || status.left == Nstatus::NOTEXISTS) {
+            return status;
+        }
+
+        if(!prev_page) {
+            if(parent.children.size() == 1) {
+                status.left = Nstatus::NOTEXISTS;
+                return status;
+            }
+            auto prev_internal_pos = FindPrevInternalEntry(parent, current_entry.key, type);
+            if(!prev_internal_pos) {
+                std::cout << "\n\n\n------\nRunTime got here\n------\n\n\n";
+                status.left = Nstatus::NOTEXISTS;
+                return status;
+            }
+            InternalEntry previous_internal = parent.children[*prev_internal_pos];
+            
+            prev_leafID = previous_internal.right_child;
+            Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
+            assert(prev_page);
+
+            BTreeNode prev_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            assert(!is_underfull(prev_leaf.entries.size()));
+            if(is_at_minimum(prev_leaf.entries.size())) {
+                status.left = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(prev_leaf.entries.size())) {
+                status.left = Nstatus::ABOVEMIN;
+            }
+            status.left_node = prev_leaf;
+            return status;
+        }
+        else if(!next_page) {
+            if(parent.children.size() == 1) {
+                status.right = Nstatus::NOTEXISTS;
+                return status;
+            }
+            auto next_internal_pos = FindNextInternalEntry(parent, current_entry.key, type);
+            if(!next_internal_pos) {
+                std::cout << "\n\n\n------\nRunTime got here\n------\n\n\n";
+                status.left = Nstatus::NOTEXISTS;
+                return status;
+            }
+            InternalEntry Next_internal = parent.children[*next_internal_pos];
+            
+            next_leafID = Next_internal.left_child;
+            Page* next_page = requestPage(file, pager, {fileID, next_leafID});
+            assert(next_page);
+
+            BTreeNode next_leaf = deserializeNode(next_page->buffer, type, next_page->header.NumRows);
+            assert(!is_underfull(next_leaf.entries.size()));
+            if(is_at_minimum(next_leaf.entries.size())) {
+                status.right = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(next_leaf.entries.size())) {
+                status.right = Nstatus::ABOVEMIN;
+            }
+            status.right_node = next_leaf;
+            return status;
+        }
+        else {
+            assert(false && "Internal entry does not have any Neighbors");
+        }
         return status;
+    }
+    else {
+
+        assert(history.nodes.size() > 1);
+        size_t prev_node = 0;
+        for(size_t i = history.nodes.size(); --i > 0;) {
+            if(history.nodes[i] == node.page_id) {
+                prev_node = --i;
+                break;
+            }
+        }
+        //assert(prev_node != 0);
+        PageID parentID = history.nodes[prev_node];
+        Page* parentPage = requestPage(file, pager, {fileID, parentID});
+        assert(parentPage);
+
+        BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
+        status.parent = parent;
+
+        InternalEntry current_entry;
+        if(parent.children.size() == 1) {
+            current_entry = parent.children[0];
+        }
+        else {
+            size_t pos = 0;
+            for(const auto& child : parent.children) {
+                if(child.left_child == node.page_id) {
+                    if (pos == 0) {
+                        status.left == Nstatus::NOTEXISTS;
+                        return status;
+                    }
+                    current_entry = child;
+                    break;
+                }
+                if(child.right_child == node.page_id) {
+                    current_entry = child;
+                    break;
+                }
+                pos++;
+            }
+        }
+        PageID prev_internalID = 0;
+        PageID next_internalID = 0;
+        Page* prev_page = nullptr;
+        Page* next_page = nullptr;
+
+        if(current_entry.right_child == node.page_id) {
+            prev_internalID = current_entry.left_child;
+            Page* prev_page = requestPage(file, pager, {fileID, prev_internalID});
+            assert(prev_page);
+
+            BTreeNode prev_internal = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            assert(!prev_internal.is_leaf);
+            assert(!is_underfull(prev_internal.entries.size()));
+            if(is_at_minimum(prev_internal.children.size())) {
+                std::cout << "Left one was detected as at minimum\n\n\n ---------------";
+                int pos = 1;
+                for (auto entries: prev_internal.children) {
+                    std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
+                }
+                std::cout << "---------------\n\n\n";
+                status.left = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(prev_internal.children.size())) {
+                std::cout << "Left one was detected as overfull\n\n\n";
+                status.left = Nstatus::ABOVEMIN;
+            }
+            status.left_node = prev_internal;
+            return status;
+        }
+        else if (current_entry.left_child == node.page_id) {
+            next_internalID = current_entry.right_child;
+            Page* next_page = requestPage(file, pager, {fileID, next_internalID});
+            assert(next_page);
+
+            BTreeNode next_internal = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            assert(!next_internal.is_leaf);
+            assert(!is_underfull(next_internal.entries.size()));
+            if(is_at_minimum(next_internal.children.size())) {
+                std::cout << "Left one was detected as at minimum\n\n\n ---------------";
+                int pos = 1;
+                for (auto entries: next_internal.children) {
+                    std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
+                }
+                std::cout << "---------------\n\n\n";
+                status.left = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(next_internal.children.size())) {
+                std::cout << "Left one was detected as overfull\n\n\n";
+                status.left = Nstatus::ABOVEMIN;
+            }
+            status.right_node = next_internal;
+            return status;
+        }
+
+        if(!prev_page) {
+            if(parent.children.size() == 1) {
+                status.left = Nstatus::NOTEXISTS;
+                return status;
+            }
+            auto prev_internal_pos = FindPrevInternalEntry(parent, current_entry.key, type);
+            if(!prev_internal_pos) {
+                std::cout << "\n\n\n------\nRunTime got here\n------\n\n\n";
+                status.left = Nstatus::NOTEXISTS;
+                return status;
+            }
+            InternalEntry previous_internal = parent.children[*prev_internal_pos];
+            
+            prev_internalID = previous_internal.right_child;
+            Page* prev_page = requestPage(file, pager, {fileID, prev_internalID});
+            assert(prev_page);
+
+            BTreeNode prev_internal = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            assert(!is_underfull(prev_internal.children.size()));
+            if(is_at_minimum(prev_internal.children.size())) {
+                status.left = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(prev_internal.children.size())) {
+                status.left = Nstatus::ABOVEMIN;
+            }
+            status.left_node = prev_internal;
+            return status;
+        }
+        else if(!next_page) {
+            if(parent.children.size() == 1) {
+                status.right = Nstatus::NOTEXISTS;
+                return status;
+            }
+            auto next_internal_pos = FindNextInternalEntry(parent, current_entry.key, type);
+            if(!next_internal_pos) {
+                std::cout << "\n\n\n------\nRunTime got here\n------\n\n\n";
+                status.left = Nstatus::NOTEXISTS;
+                return status;
+            }
+            InternalEntry Next_internal = parent.children[*next_internal_pos];
+            
+            next_internalID = Next_internal.left_child;
+            Page* next_page = requestPage(file, pager, {fileID, next_internalID});
+            assert(next_page);
+
+            BTreeNode next_internal = deserializeNode(next_page->buffer, type, next_page->header.NumRows);
+            assert(!is_underfull(next_internal.children.size()));
+            if(is_at_minimum(next_internal.children.size())) {
+                status.right = Nstatus::ATMIN;
+            }
+            if(is_above_minimum(next_internal.children.size())) {
+                status.right = Nstatus::ABOVEMIN;
+            }
+            status.right_node = next_internal;
+            return status;
+        }
+        else {
+            assert(false && "Internal entry does not have any Neighbors");
+        }
     }
     return status;
 }
 void REDESTRIBUTE(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHistory& history, const DataType type) {
-    assert(node.is_leaf);
     assert(node.page_id != ROOT);
     assert(is_underfull(node.entries.size()));
     NeighborStatus status = CheckNeighborStatus(file, node, pager, history, type);
@@ -1236,6 +1788,12 @@ void REDESTRIBUTE(std::fstream& file, BTreeNode& node, Pager& pager, const Trave
         return;
     }
     else if(status.left == Nstatus::ATMIN) {
+        if (status.left_node->is_leaf) {
+            std::cout << "Leaf node is ";
+        }
+        else {
+            std::cout << "Internal Entry is ";
+        }
         std::cout << "Merging with left\n\n";
         assert(status.left_node);
         MERGE(file, node, *status.left_node, status, pager, type);
@@ -1334,7 +1892,7 @@ std::vector<LeafEntry> SELECT_FROM_TREE(std::fstream& file, BPlusTree& tree, con
     return results;
 }
 
-int main() {
+int mainnnnne() {
 
     const auto type = DataType::INT;
 
@@ -1409,15 +1967,15 @@ int main() {
     std::cout << "---------------------\n";
     */
 
-    //INSERT_INTO_TREE(file, {100, 104, 0}, tree);
+    INSERT_INTO_TREE(file, {100, 104, 0}, tree);
     INSERT_INTO_TREE(file, {60, 104, 364}, tree);
     INSERT_INTO_TREE(file, {80, 104, 635}, tree);
-    //INSERT_INTO_TREE(file, {200, 104, 635}, tree);
+    INSERT_INTO_TREE(file, {200, 104, 635}, tree);
 
-    //INSERT_INTO_TREE(file, {300, 104, 635}, tree);
-    //INSERT_INTO_TREE(file, {250, 104, 635}, tree);
+    INSERT_INTO_TREE(file, {300, 104, 635}, tree);
+    INSERT_INTO_TREE(file, {250, 104, 635}, tree);
 
-    DELETE_FROM_TREE(file, {10, 100, 100}, tree);
+    DELETE_FROM_TREE(file, {60, 100, 100}, tree);
     std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 250);
     /*
     std::cout << "-----RESULT-----" << "\n";
@@ -1431,7 +1989,12 @@ int main() {
   
     std::cout << "\n\n\n\n\n\n\n";
     std::cout << "---TREE---\n";
-    printTree(file, tree);
+
+    Page* p = requestPage(file, tree.pager, {fileID, tree.root});
+    assert(p);
+    BTreeNode rootn = deserializeNode(p->buffer, type, p->header.NumRows);
+    assert(root.page_id == ROOT);
+    printTree(file, tree.pager, rootn, type);
 
     std::cout << "Compiles!\n\n";
     return 0;
