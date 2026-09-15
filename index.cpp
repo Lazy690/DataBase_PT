@@ -1546,7 +1546,7 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
                 }
                 if(child.right_child == node.page_id) {
                     if (pos == (parent.children.size() - 1) && history.nodes.size() > 2) {
-                        status.left = Nstatus::NOTEXISTS;
+                        status.right = Nstatus::NOTEXISTS;
                     }
                     current_entry = child;
                     break;
@@ -1588,21 +1588,21 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
             Page* next_page = requestPage(file, pager, {fileID, next_leafID});
             assert(next_page);
 
-            BTreeNode next_leaf = deserializeNode(prev_page->buffer, type, prev_page->header.NumRows);
+            BTreeNode next_leaf = deserializeNode(next_page->buffer, type, next_page->header.NumRows);
             assert(next_leaf.is_leaf);
             assert(!is_underfull(next_leaf.entries.size()));
             if(is_at_minimum(next_leaf.entries.size())) {
-                std::cout << "Left one was detected at minimum\n\n\n ---------------";
+                std::cout << "right one was detected at minimum\n\n\n ---------------";
                 int pos = 1;
                 for (auto entries: next_leaf.entries) {
                     std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
                 }
                 std::cout << "---------------\n\n\n";
-                status.left = Nstatus::ATMIN;
+                status.right = Nstatus::ATMIN;
             }
             if(is_above_minimum(next_leaf.entries.size())) {
-                std::cout << "Left one was detected as overfull\n\n\n";
-                status.left = Nstatus::ABOVEMIN;
+                std::cout << "right one was detected as overfull\n\n\n";
+                status.right = Nstatus::ABOVEMIN;
             }
             status.right_node = next_leaf;
             return status;
@@ -1625,7 +1625,9 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
             }
             InternalEntry previous_internal = parent.children[*prev_internal_pos];
             
-            prev_leafID = previous_internal.right_child;
+            assert(previous_internal.left_child != NULLPAGE);
+            prev_leafID = previous_internal.left_child;
+
             Page* prev_page = requestPage(file, pager, {fileID, prev_leafID});
             assert(prev_page);
 
@@ -1671,6 +1673,7 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
         else {
             assert(false && "Internal entry does not have any Neighbors");
         }
+
         return status;
     }
     else {
@@ -1757,11 +1760,11 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
                     std::cout << pos << ". " << std::get<int32_t>(entries.key) << "\n";
                 }
                 std::cout << "---------------\n\n\n";
-                status.left = Nstatus::ATMIN;
+                status.right = Nstatus::ATMIN;
             }
             if(is_above_minimum(next_internal.children.size())) {
                 std::cout << "Left one was detected as overfull\n\n\n";
-                status.left = Nstatus::ABOVEMIN;
+                status.right = Nstatus::ABOVEMIN;
             }
             status.right_node = next_internal;
             return status;
@@ -1780,7 +1783,9 @@ NeighborStatus CheckNeighborStatus(std::fstream& file, BTreeNode& node, Pager& p
             }
             InternalEntry previous_internal = parent.children[*prev_internal_pos];
             
-            prev_internalID = previous_internal.right_child;
+            assert(previous_internal.left_child != NULLPAGE);
+            prev_internalID = previous_internal.left_child;
+
             Page* prev_page = requestPage(file, pager, {fileID, prev_internalID});
             assert(prev_page);
 
@@ -2036,8 +2041,9 @@ int main() {
 
     INSERT_INTO_TREE(file, {300, 104, 635}, tree);
     INSERT_INTO_TREE(file, {250, 104, 635}, tree);
+    INSERT_INTO_TREE(file, {400, 104, 635}, tree);
 
-    //DELETE_FROM_TREE(file, {60, 100, 100}, tree);
+    DELETE_FROM_TREE(file, {200, 100, 100}, tree);
     std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 250);
     /*
     std::cout << "-----RESULT-----" << "\n";
