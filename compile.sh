@@ -6,4 +6,4 @@ cd build
 mv database ..
 cd ..
 ./database
-rm database
+#rm database

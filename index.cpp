@@ -18,6 +18,7 @@ namespace fs = std::filesystem;
 
 const uint32_t FIRST_PAGE_ID = 100;
 const uint32_t ROOT = FIRST_PAGE_ID;
+const uint32_t NULLPAGE = 0;
 
 //Temporary
 const uint32_t fileID = 1;
@@ -560,11 +561,15 @@ std::vector<LeafEntry> select_from_leaf(const BTreeNode& node, const Conditional
     }
     return results;
 }
-void insert_into_internal(BTreeNode& node, const InternalEntry& child, const DataType type) {
+size_t insert_into_internal(BTreeNode& node, const InternalEntry& child, const DataType type) {
     assert(!node.is_leaf);
-    auto insert_pos = node.children.begin();
-    insert_pos += sorted_insert_position(child.key, node.children, type);
-    node.children.insert(insert_pos, child);
+    size_t insert_pos = sorted_insert_position(child.key, node.children, type);
+
+    auto it = node.children.begin();
+    it += insert_pos;
+    node.children.insert(it, child);
+
+    return insert_pos;
 }
 void delete_from_internal(BTreeNode& node, const InternalEntry& child, const DataType type) {
     assert(!node.is_leaf);
@@ -716,16 +721,18 @@ std::optional<size_t> FindNextInternalEntry(const BTreeNode& node, const var key
 std::optional<size_t> FindPrevInternalEntry(const BTreeNode& node, const var key, DataType type) {
     assert(!node.is_leaf);
     //size_t i = 0;
+    //if(node.children.size() <= 1) return std::nullopt;
     if(is_same_var(node.children.front().key, key, type)) return std::nullopt;
     for (size_t i = 0; i < node.children.size(); i++) {
         if (is_same_var(node.children[i].key, key, type)) return --i;
     }
+    std::cout << "found nothing\n";
     return std::nullopt;
 }
 
 Page* MakeNewRoot(std::fstream& file, BTreeNode& left, const BTreeNode& right, Pager& pager, uint32_t& latest_page_id, DataType type) {
     BTreeNode root;
-    root.page_id = 100;
+    root.page_id = ROOT;
     root.is_leaf = false;
     left.page_id = ++latest_page_id;
     Page root_page = create_page(ROOT);
@@ -741,26 +748,20 @@ void Update_frontNback_entry_pointers(BTreeNode& parent, const InternalEntry& pi
     auto next_internal_entry_pos = FindNextInternalEntry(parent, pivot.key, type);
     
     if(next_internal_entry_pos) {
-        //std::cout << "next internal: " << std::get<int32_t>(parent.children[*next_internal_entry_pos].key) << "\n"; 
         parent.children[*next_internal_entry_pos].left_child = pivot.right_child;
-        //std::cout << "set left child to page " << parent.children[*next_internal_entry_pos].left_child << "\n";
-        //std::cout << "right child is page " << parent.children[*next_internal_entry_pos].right_child << "\n";
     }
 
     auto prev_internal_entry_pos = FindPrevInternalEntry(parent, pivot.key, type);
     
     if(prev_internal_entry_pos) {
-        //std::cout << "prev internal: " << std::get<int32_t>(parent.children[*prev_internal_entry_pos].key) << "\n"; 
         parent.children[*prev_internal_entry_pos].right_child = pivot.left_child;
-        //std::cout << "set left child to page " << parent.children[*prev_internal_entry_pos].left_child << "\n";
-        //std::cout << "right child is page " << parent.children[*prev_internal_entry_pos].right_child << "\n";
     }
 }
 void Update_frontNback_entry_pointers(BTreeNode& parent, const InternalEntry& pivot, BTreeNode& right_node, DataType type) {
     assert(!parent.is_leaf);
 
     auto next_internal_entry_pos = FindNextInternalEntry(parent, pivot.key, type);
-    
+ 
     if(next_internal_entry_pos) {
         std::cout << "next internal: " << std::get<int32_t>(parent.children[*next_internal_entry_pos].key) << "\n"; 
         parent.children[*next_internal_entry_pos].left_child = pivot.right_child;
@@ -770,7 +771,7 @@ void Update_frontNback_entry_pointers(BTreeNode& parent, const InternalEntry& pi
     }
 
     auto prev_internal_entry_pos = FindPrevInternalEntry(parent, pivot.key, type);
-    
+ 
     if(prev_internal_entry_pos) {
         std::cout << "prev internal: " << std::get<int32_t>(parent.children[*prev_internal_entry_pos].key) << "\n"; 
         parent.children[*prev_internal_entry_pos].right_child = pivot.left_child;
@@ -797,7 +798,7 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         BTreeNode right_node;
 
         right_node.page_id = ++latest_page_id;
-        
+
         right_node.entries = right_entries;
         left_node.entries = {};
         left_node.entries = left_entries;
@@ -818,14 +819,51 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
 
         BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
 
-        pivot_entry.left_child  = left_node.page_id;
-        pivot_entry.right_child = right_node.page_id;
-        std::cout << "promoting: " << std::get<int32_t>(pivot_entry.key) << "\n";
-        insert_into_internal(parent, pivot_entry, type);
-        
-        Update_frontNback_entry_pointers(parent, pivot_entry, right_node, type);
+        size_t insert_pos = sorted_insert_position(pivot_entry.key, parent.children, type);
+        //if children is empty it will skipt these ifs
+        std::cout << "insert_pos: " << insert_pos << ", size: " << parent.children.size() << "\n";
+        if(insert_pos == parent.children.size() &&
+          (parent.children.size() >= 1)) {
 
+            size_t prev_int_pos = insert_pos - 1;
+            if (parent.children.size() == 1) {
+                prev_int_pos = 0;
+            }
+            else {
+                prev_int_pos = insert_pos - 1;
+            }
+            InternalEntry& prev_int = parent.children.at(prev_int_pos);
+            prev_int.right_child = NULLPAGE;
+            std::cout << "\n\nprev key is: " << std::get<int32_t>(prev_int.key) << " left_child : " << prev_int.left_child << " | " << prev_int.right_child << "\n";
+
+            pivot_entry.left_child  = left_node.page_id;
+            pivot_entry.right_child = right_node.page_id;
+
+        }
+        else if (insert_pos != parent.children.size()){
+
+            auto next_int_pos = FindNextInternalEntry(parent, pivot_entry.key, type);
+            assert(next_int_pos);
+            InternalEntry& next_int = parent.children.at(*next_int_pos);
+
+            next_int.left_child   = right_node.page_id;
+            pivot_entry.right_child = NULLPAGE;
+            pivot_entry.left_child  = left_node.page_id;
+        }
+        else {
+            pivot_entry.right_child = right_node.page_id;
+            pivot_entry.left_child  = left_node.page_id;
+            //std::cout << "key is : " << std::get<int32_t>(pivot_entry.key) << " right: " << pivot_entry.right_child << " left : " << pivot_entry.left_child << "\n";
+        }
+
+        if(parent.children.size() > 0) {
+            InternalEntry prev_int = parent.children.at(insert_pos - 1);
+
+        }
+        insert_into_internal(parent, pivot_entry, type);
         left_node.next_leaf = right_node.page_id;
+ 
+        //Update_frontNback_entry_pointers(parent, pivot_entry, right_node, type);
 
         Page right_page = create_page(right_node.page_id);
         Page* left_page = requestPage(file, pager, {fileID, left_node.page_id});
@@ -834,7 +872,6 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
            pager.pages.insert({{fileID, left_node.page_id}, new_page});
            left_page = requestPage(file, pager, {fileID, left_node.page_id});
         }
-        std::cout << "New right nodes page id: " << right_node.page_id << "\n";
 
         insertNodeIntoPage(parent, *parentPage, type);
         insertNodeIntoPage(right_node, right_page, type);
@@ -848,7 +885,6 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         return;
     }
     else {
-        std::cout << "Splitting an internal node now\n";
         assert(node.entries.empty());
 
         std::vector<InternalEntry> copy = node.children;
@@ -876,7 +912,6 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
         PageID parentID = 0;
 
         if(left_node.page_id == ROOT) {
-            std::cout << "Creating new root when splitting internal node\n";
             parentPage = MakeNewRoot(file, left_node, right_node, pager, latest_page_id, type);
             parentID == ROOT;
         }
@@ -897,11 +932,44 @@ void SPLIT(std::fstream& file, BTreeNode& node, Pager& pager, const TraversalHis
 
         BTreeNode parent = deserializeNode(parentPage->buffer, type, parentPage->header.NumRows);
 
+        size_t insert_pos = sorted_insert_position(pivot_entry.key, parent.children, type);
+
+        if(insert_pos == parent.children.size() &&
+          (parent.children.size() > 1)) {
+
+            //std::cout << "key is: " << std::get<int32_t>(pivot_entry.key) << "\n";
+            size_t prev_int_pos = insert_pos - 1;
+            InternalEntry& prev_int = parent.children.at(prev_int_pos);
+            prev_int.right_child = NULLPAGE;
+
+            pivot_entry.left_child  = left_node.page_id;
+            pivot_entry.right_child = right_node.page_id;
+
+        }
+        else if (insert_pos != parent.children.size()){
+
+            auto next_int_pos = FindNextInternalEntry(parent, pivot_entry.key, type);
+            assert(next_int_pos);
+            InternalEntry& next_int = parent.children.at(*next_int_pos);
+
+            pivot_entry.right_child = NULLPAGE;
+            pivot_entry.left_child  = left_node.page_id;
+        }
+        else {
+            pivot_entry.right_child = right_node.page_id;
+            pivot_entry.left_child  = left_node.page_id;
+            std::cout << "key is : " << std::get<int32_t>(pivot_entry.key) << " right: " << pivot_entry.right_child << " left : " << pivot_entry.left_child << "\n";
+        }
+        /*
         pivot_entry.left_child  = left_node.page_id;
         pivot_entry.right_child = right_node.page_id;
+        */
         insert_into_internal(parent, pivot_entry, type);
+        left_node.children.back().right_child = right_node.children.front().left_child;
+        right_node.children.erase(right_node.children.begin());
 
-        Update_frontNback_entry_pointers(parent, pivot_entry, type);
+
+        //Update_frontNback_entry_pointers(parent, pivot_entry, type);
 
         Page right_page = create_page(right_node.page_id);
         Page* left_page = requestPage(file, pager, {fileID, left_node.page_id});
@@ -1809,6 +1877,7 @@ void INSERT_INTO_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tre
     TraversalHistory history;
     //std::cout << "Inserting: " << std::get<int32_t>(entry.key) << "\n";
     int it = 0;
+
     TraverseResult result = Traverse(file, entry.key, tree.root, tree.pager, history, type, it);
     assert(result.node.is_leaf);
     insert_into_leaf(result.node, entry, type);
@@ -1817,16 +1886,9 @@ void INSERT_INTO_TREE(std::fstream& file, const LeafEntry& entry, BPlusTree& tre
     assert(page);
 
     if (!will_fit(result.node.entries.size())) {
-        std::cout << "----------------\n";
-        std::cout << "Num entries in node: " << result.node.entries.size() << "\n";
-        std::cout << "Spliting while inserting key: " << std::get<int32_t>(entry.key) << "\n";
-        printNode(result.node, type);
         SPLIT(file, result.node, tree.pager, history, tree.header.LatestPageID, type);
-        std::cout << "----------------\n";
-        std::cout << "inserting: " << std::get<int32_t>(entry.key) << " into page " << tree.header.LatestPageID << "\n";
     }
     else {
-        std::cout << "inserting: " << std::get<int32_t>(entry.key) << " into page " << page->header.id << "\n";
         insertNodeIntoPage(result.node, *page, type);
     }
 }
@@ -1892,7 +1954,7 @@ std::vector<LeafEntry> SELECT_FROM_TREE(std::fstream& file, BPlusTree& tree, con
     return results;
 }
 
-int mainnnnne() {
+int main() {
 
     const auto type = DataType::INT;
 
@@ -1975,7 +2037,7 @@ int mainnnnne() {
     INSERT_INTO_TREE(file, {300, 104, 635}, tree);
     INSERT_INTO_TREE(file, {250, 104, 635}, tree);
 
-    DELETE_FROM_TREE(file, {60, 100, 100}, tree);
+    //DELETE_FROM_TREE(file, {60, 100, 100}, tree);
     std::vector<LeafEntry> results = SELECT_FROM_TREE(file, tree, Conditional::EQUAL, 250);
     /*
     std::cout << "-----RESULT-----" << "\n";
